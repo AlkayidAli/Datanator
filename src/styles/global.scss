@@ -1,0 +1,75 @@
+$background-primary-color: #2C2C2C;
+$background-secondary-color: #E3E3E3;
+
+// font color variables
+$text-black: #000000;
+$text-grey-90: #1E1E1E;
+$text-grey-10: #9E9E9E;
+$text-white: #F5F5F5;
+
+$font-weight-normal: 400;
+$font-weight-bold: 550;
+$font-family-primary: 'Inter', sans-serif;
+
+
+html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    font-family: $font-family-primary;
+    font-weight: $font-weight-normal;
+}
+
+button{
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    background: transparent;
+    justify-content: center;
+    width: 6em;
+    padding: 0.4em;
+    border: solid 1px;
+    border-radius: 0.5em;
+    font-weight: $font-weight-normal;
+    font-size: 1em;
+    font-family: $font-family-primary;
+
+}
+
+    .primary{
+        background-color: $background-primary-color;
+        color: $text-white;
+        border-color: $text-grey-10;
+
+        &:hover{
+            background-color: $background-secondary-color;
+            border-color: $background-primary-color;
+            color: $text-grey-90;
+        }
+    }
+    .secondary{
+        background-color: $background-secondary-color;
+        color: $text-grey-90;
+        border-color: $background-primary-color;
+
+        &:hover{
+            background-color: $background-primary-color;
+            border-color: $background-secondary-color;
+            color: $text-white;
+        }
+    }
+
+
+a{
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: $font-family-primary;
+    color: $text-grey-90;
+    font-weight: $font-weight-normal;
+    
+        &:hover{
+            text-decoration: underline;
+
+        }
+}
