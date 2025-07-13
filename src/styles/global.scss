@@ -12,14 +12,14 @@ $font-weight-bold: 550;
 $font-family-primary: 'Inter', sans-serif;
 
 
-html, body {
+:global(html, body) {
     margin: 0 !important;
     padding: 0 !important;
     font-family: $font-family-primary;
     font-weight: $font-weight-normal;
 }
 
-button{
+:global(button){
     display: inline-flex;
     align-items: center;
     flex-wrap: nowrap;
@@ -35,7 +35,7 @@ button{
 
 }
 
-    .primary{
+    :global(.primary){
         background-color: $background-primary-color;
         color: $text-white;
         border-color: $text-grey-10;
@@ -46,7 +46,7 @@ button{
             color: $text-grey-90;
         }
     }
-    .secondary{
+    :global(.secondary){
         background-color: $background-secondary-color;
         color: $text-grey-90;
         border-color: $background-primary-color;
@@ -59,7 +59,7 @@ button{
     }
 
 
-a{
+:global(a){
     text-decoration: none;
     display: inline-flex;
     align-items: center;

@@ -1,5 +1,69 @@
 <style lang="scss">
-    @use "signup.scss";
+    @use "../../../styles/global.scss";
+
+.signup-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: auto;
+    width: max-content;
+    height: max-content;
+    border: solid 1px global.$text-grey-10;
+    border-radius: 0.5em;
+    padding: 1em;
+
+    h2{
+        font-size: 2.5em;
+    }
+
+
+    .signup-form {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: 350px;
+        gap: 1em;
+
+        .form-group{
+            width: 100%;
+        }
+
+        .checkbox-group{
+            display: flex;
+            align-items: center;
+            justify-content: start;
+            width: 100%;
+
+            input{
+                width: 1.2em;
+            }
+            label{
+                margin: 0;
+            }
+        }
+
+        label{
+            font-size: 0.8em;
+            margin-bottom: 0.5em;
+        }
+
+        input {
+            width: -webkit-fill-available;
+            height: 1.8em;
+            border-radius: 4px;
+            border: solid 1px global.$text-grey-10;
+            font-size: 1em;
+        }
+        
+        button{
+            width: 100%;
+        }
+       
+    }
+}
+
 </style>
 
 <div class="signup-container">

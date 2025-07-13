@@ -8,10 +8,10 @@
 
 
 
-<Nav />
+
 
 <Login/>
 
 <Signup />
-<Footer />
+
 
