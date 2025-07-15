@@ -1,5 +1,4 @@
 <div class="login-container">
-	<h2>Welcome Back!</h2>
 	<form class="login-form">
 		<div class="form-group">
 			<label for="Email">Email</label>
