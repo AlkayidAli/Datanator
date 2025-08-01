@@ -1,5 +1,5 @@
 <script lang="ts">
-	import LoginNOTitle from '$lib/components/login-no-title/login-no-title.svelte';
+	import LoginNOTitle from '$lib/components/login/login-no-title.svelte';
 	import learnersImage from '../images/learners.png';
 	import developersImage from '../images/developers.png';
 	import researchersImage from '../images/researchers.png';

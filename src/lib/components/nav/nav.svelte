@@ -1,3 +1,4 @@
+
 <script lang="ts">
     import logo from "$lib/components/nav/logo.png"
 </script>
@@ -66,4 +67,3 @@ nav{
         <button class="primary">Sign Up</button>
         </div>
 </nav>
-

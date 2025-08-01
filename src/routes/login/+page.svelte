@@ -1,8 +1,29 @@
+<script>
+	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
+</script>
+
+
 <div class="login-container">
-	<form class="login-form">
+	<h2>Welcome Back!</h2>
+	<form action="/login" method="post" use:enhance={() => {
+		return async ({ result }) => {
+			console.log(result);
+			//
+			if (result.type == 'success' && result.status === 200){
+				goto('/');
+			} else if (result.type == 'redirect'){
+				goto(result.location, {invalidateAll:true})
+			} else{
+				// Handle error case, e.g., show a notification or alert
+				const errorText = (result.type === 'error' ? result.error.message : result.data?.message);
+				// show error
+			}
+		};
+	}} class="login-form">
 		<div class="form-group">
-			<label for="Email">Email</label>
-			<input type="text" id="Email" name="Email" required />
+			<label for="email">Email</label>
+			<input type="text" id="email" name="email" required />
 		</div>
 		<div class="form-group">
 			<label for="password">Password</label>
@@ -19,7 +40,7 @@
 </div>
 
 <style lang="scss">
-	@use '../../../styles/global.scss';
+	@use '../../styles/global.scss';
 
 	.login-container {
 		display: flex;
