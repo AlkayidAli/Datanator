@@ -1,6 +1,7 @@
 
 <script lang="ts">
-    import logo from "$lib/components/nav/logo.png"
+    import logo from "$lib/components/nav/logo.png";
+    let { data } = $props();
 </script>
 
 <style lang="scss">
@@ -62,8 +63,15 @@ nav{
         <a href="/">Contact</a>
     </div>
 
-    <div class='nav-buttons'>
-        <button class="secondary">Login</button>
-        <button class="primary">Sign Up</button>
-        </div>
+     {#if data.user}
+            <img src={"https://ui-avatars.com/api/?name=" + data.user.email} alt="Avatar" style="width:32px;height:32px;border-radius:50%;margin-right:0.5em;" />
+            <button class="secondary" ><a href="/logout">Logout</a></button>
+        {:else}
+            <button class="secondary">Login</button>
+            <button class="primary" >Sign Up</button>
+        {/if}
+
+        {console.log(data)}
+
+       
 </nav>

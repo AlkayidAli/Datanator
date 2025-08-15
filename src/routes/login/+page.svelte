@@ -1,6 +1,7 @@
 <script>
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
+	import { toasts } from '$lib/stores/toastStore';
 </script>
 
 
@@ -11,13 +12,14 @@
 			console.log(result);
 			//
 			if (result.type == 'success' && result.status === 200){
+				toasts.success('Login successful!');
 				goto('/');
 			} else if (result.type == 'redirect'){
 				goto(result.location, {invalidateAll:true})
 			} else{
 				// Handle error case, e.g., show a notification or alert
-				const errorText = (result.type === 'error' ? result.error.message : result.data?.message);
-				// show error
+				const errorText = (result.type === 'error' ? result.error.message : result.data?.message) || 'Login failed';
+				toasts.error(errorText);
 			}
 		};
 	}} class="login-form">

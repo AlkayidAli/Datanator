@@ -4,6 +4,7 @@
 	import developersImage from '../images/developers.png';
 	import researchersImage from '../images/researchers.png';
 	import checkIcon from '../images/check.png';
+
 </script>
 
 <div class="welcome-container">
@@ -13,8 +14,8 @@
 			and Manipulate <br />
 			your data with <br />
 			DATANATOR
-		</h1>
 
+		</h1>
 		<div class="welcome-subtext-container">
 			<div class="subtext">
 				<p>Clean Data</p>
