@@ -1,5 +1,9 @@
+<script>
+	import { enhance } from "$app/forms";
+    let {form} = $props()
+</script>
 <style lang="scss">
-    @use "../../../styles/global.scss";
+    @use "$lib/styles/global.scss";
 
 .signup-container {
     display: flex;
@@ -68,26 +72,24 @@
 
 <div class="signup-container">
     <h2>Create Account</h2>
-    <form class="signup-form">
+    <form class="signup-form" action="?/create" method="post" use:enhance>
         <div class="form-group">
-            <label for="Email">Email</label>
-            <input type="text" id="Email" name="Email" required>
+            <label for="email">Email</label>
+            <input type="text" id="email" name="email" required>
         </div>
         <div class="form-group">
             <label for="password">Password</label>
             <input type="password" id="password" name="password" required>
         </div>
-
         <div class="form-group">
             <label for="confirm-password">Confirm Password</label>
             <input type="password" id="confirm-password" name="confirm-password" required>
         </div>
-
         <div class="checkbox-group">
             <input type="checkbox" id="terms" name="terms" required>
             <label for="terms">I agree to the terms and conditions</label>
         </div>
         <button type="submit" class="primary">Register</button>
-        </form>
+    </form>
 
 </div>

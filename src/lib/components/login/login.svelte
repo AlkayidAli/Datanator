@@ -36,7 +36,7 @@
 </div>
 
 <div class="signup-container">
-	<a href="/" class="signup-link">Don't have an account? Sign up</a>
+	<a href="/signup" class="signup-link">Don't have an account? Sign up</a>
 </div>
 
 <style lang="scss">

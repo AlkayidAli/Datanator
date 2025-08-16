@@ -9,8 +9,6 @@
 	<h2>Welcome Back!</h2>
 	<form action="/login" method="post" use:enhance={() => {
 		return async ({ result }) => {
-			console.log(result);
-			//
 			if (result.type == 'success' && result.status === 200){
 				toasts.success('Login successful!');
 				goto('/');
@@ -38,7 +36,7 @@
 </div>
 
 <div class="signup-container">
-	<a href="/" class="signup-link">Don't have an account? Sign up</a>
+	<a href="/signup" class="signup-link">Don't have an account? Sign up</a>
 </div>
 
 <style lang="scss">

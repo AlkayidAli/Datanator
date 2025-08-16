@@ -1,4 +1,3 @@
-
 // this file runs on EVERY request
 
 import PostgreSQL from '$lib/common/DB_Postgresql'
@@ -31,11 +30,16 @@ export async function handle({event, resolve}) {
         // if you have an API endpoint and it needs to be behind a login
         // API endpoint need JSON responses, NOT a redirect
         return json({status:401, message:'Not Authorized'})
-    } else if(event.url.pathname !== '/login' && !event.locals.user){
-        // if NO session found, and NOT on login page, send to login page
+    } 
 
+    // List of public/auth pages that should NOT redirect
+    const noRedirectPaths = ['/login', '/create', '/forgot', '/change', `/signup`];
+
+    if (
+        noRedirectPaths.every(path => event.url.pathname !== path) &&
+        !event.locals.user
+    ) {
         // check if the action is a form submission, need to send a different response
-        // A user might submit a form and be logged out...
         const formSubmission = event.request.headers.get('x-sveltekit-action') === 'true'
         if(formSubmission){
             return new Response(
@@ -46,11 +50,8 @@ export async function handle({event, resolve}) {
                 } satisfies ActionResult)
             )
         } else {
-            // normal request that can be redirected
             throw redirect(303, '/login')
         }
-
-       
     }
 
     return await resolve(event)
