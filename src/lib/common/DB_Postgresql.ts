@@ -17,7 +17,7 @@ const PostgreSQL = () => {
             if(dbContext){
 
                 try{ 
-                    //console.log(sql, params);
+                   
                     const res = await dbContext.query(sql, params);
                     return res;
                 } catch (err) {
