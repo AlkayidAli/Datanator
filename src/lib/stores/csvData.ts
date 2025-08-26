@@ -1,16 +1,17 @@
-// Global store for parsed CSV data.
-// We keep this as a traditional Svelte store so any component (Svelte 4 or 5 style) can subscribe.
-// In Svelte 5 you can still use $csvData for auto-subscription inside components.
-
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
+
+export type CellValue = string | number | boolean | Date | null;
+export type ColumnType = 'string' | 'number' | 'boolean' | 'date' | 'null' | 'mixed';
 
 export interface ParsedCSV {
   filename: string;
   headers: string[];
-  rows: Record<string, string | null>[];
+  rows: Record<string, CellValue>[];
   rawText?: string;
   loadedAt: string;
+  // Inferred (or configured) type per column
+  columnTypes?: Record<string, ColumnType>;
 }
 
 const LOCAL_KEY = 'csvDataStore_v1';

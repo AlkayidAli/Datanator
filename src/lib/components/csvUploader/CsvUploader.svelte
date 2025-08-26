@@ -1,21 +1,8 @@
 <script lang="ts">
-	/*
-  SVELTE 5 REFACTOR NOTES:
-  - We use $state(...) for mutable local state (replaces writable() for component-local).
-  - We use $derived(...) for computed values (like paginated rows & total pages).
-  - We use $effect(...) for side-effects reacting to reactive values.
-  - We can still auto-subscribe to the global store with $csvData because that feature remains.
-
-  Flow:
-    1. User selects file
-    2. parseCSVFile -> set into global csvData store
-    3. Local pagination state updates; derived values recompute
-*/
-
 	import { parseCSVFile } from '$lib/utils/csv/csv';
 	import { csvData, clearCSV } from '$lib/stores/csvData';
+	import { downloadCSVFromParsed, downloadOriginalCSV } from '$lib/utils/csv/export';
 
-	// Local rune-based state
 	let isParsing = $state(false);
 	let parseError: string | null = $state(null);
 	let showAdvanced = $state(false);
@@ -23,35 +10,39 @@
 	let pageSize = $state(25);
 	let currentPage = $state(1);
 
-	// Derived: total pages depends on $csvData and pageSize
+	// Export options (used by the toolbar)
+	let dlDelimiter = $state(',');
+	let dlLineEndings = $state<'auto' | '\n' | '\r\n'>('\r\n');
+	let dlIncludeBOM = $state(true);
+
 	const totalPages = $derived(() => {
 		if (!$csvData) return 0;
 		return Math.max(1, Math.ceil($csvData.rows.length / pageSize));
 	});
 
-	// Derived: paginated rows slice
 	const paginatedRows = $derived(() => {
 		if (!$csvData) return [];
 		const start = (currentPage - 1) * pageSize;
 		return $csvData.rows.slice(start, start + pageSize);
 	});
 
-	// Effect: whenever csvData changes, reset current page to 1
 	$effect(() => {
-		// Accessing $csvData here makes it a dependency.
-		if ($csvData) {
-			currentPage = 1;
-		}
+		if ($csvData) currentPage = 1;
 	});
 
-	// Helper to go to page (ensures in-range)
 	function goToPage(p: number) {
 		if (p < 1) p = 1;
 		if (p > totalPages()) p = totalPages();
 		currentPage = p;
 	}
 
-	// Handle file selection
+	// Simple US-date parser; adjust to your locale if needed
+	function parseMaybeUsDate(s: string): Date | string {
+		// new Date('8/24/2020') generally works in browsers; guard invalids
+		const d = new Date(s);
+		return Number.isNaN(d.getTime()) ? s : d;
+	}
+
 	async function handleFileSelection(e: Event) {
 		const input = e.target as HTMLInputElement;
 		if (!input.files || input.files.length === 0) return;
@@ -61,8 +52,14 @@
 		isParsing = true;
 
 		try {
-			const useHeader = true; // Later you can add a toggle
-			const parsed = await parseCSVFile(file, useHeader);
+			const parsed = await parseCSVFile(file, {
+				useHeader: true,
+				typing: 'custom',
+				columnParsers: {
+					Index: (s) => (s.trim() === '' ? null : Number(s)),
+					'Subscription Date': (s) => (s.trim() === '' ? null : parseMaybeUsDate(s))
+				}
+			});
 			csvData.set(parsed);
 		} catch (err: any) {
 			parseError = err?.message || 'Unknown parse error';
@@ -71,10 +68,24 @@
 			input.value = '';
 		}
 	}
+
+	function downloadCurrentCSV() {
+		if (!$csvData) return;
+		downloadCSVFromParsed($csvData, {
+			delimiter: dlDelimiter,
+			lineEndings: dlLineEndings,
+			includeBOM: dlIncludeBOM
+		});
+	}
+
+	function downloadOriginal() {
+		if (!$csvData) return;
+		downloadOriginalCSV($csvData, { includeBOM: dlIncludeBOM });
+	}
 </script>
 
 <div class="uploader-container">
-	<h2>CSV Uploader (Svelte 5)</h2>
+	<h2>CSV Uploader</h2>
 
 	<input
 		type="file"
@@ -111,11 +122,58 @@
 			</small>
 		</div>
 
+		<!-- Export toolbar -->
+		<div class="export-toolbar">
+			<div class="export-actions">
+				<button
+					class="primary"
+					onclick={downloadCurrentCSV}
+					aria-label="Download cleaned CSV"
+					disabled={!$csvData}
+				>
+					Download CSV
+				</button>
+				<button
+					class="secondary"
+					onclick={downloadOriginal}
+					aria-label="Download original CSV"
+					disabled={!$csvData}
+				>
+					Download Original
+				</button>
+			</div>
+
+			<!-- Toggle to reuse your existing advanced panel or keep options inline -->
+			<div class="export-options">
+				<label>
+					Delimiter:
+					<select bind:value={dlDelimiter}>
+						<option value=",">, (comma)</option>
+						<option value=";">; (semicolon)</option>
+						<option value="\t">Tab</option>
+						<option value="|">| (pipe)</option>
+					</select>
+				</label>
+
+				<label>
+					Line endings:
+					<select bind:value={dlLineEndings}>
+						<option value="auto">Auto</option>
+						<option value="\n">LF (\n)</option>
+						<option value="\r\n">CRLF (\r\n)</option>
+					</select>
+				</label>
+
+				<label class="checkbox">
+					<input type="checkbox" bind:checked={dlIncludeBOM} />
+					Include BOM (UTF‑8)
+				</label>
+			</div>
+		</div>
+
 		<div class="pagination">
 			<label>
 				Rows per page:
-				<!-- bind:value replaced by just value + on:change in Svelte 5? 
-             Svelte 5 still supports bind but we can keep it. -->
 				<select bind:value={pageSize} onchange={() => (currentPage = 1)}>
 					<option value={10}>10</option>
 					<option value={25}>25</option>
@@ -127,12 +185,12 @@
 			<button onclick={() => goToPage(1)} disabled={currentPage === 1}>First</button>
 			<button onclick={() => goToPage(currentPage - 1)} disabled={currentPage === 1}>Prev</button>
 			<span>Page {currentPage} of {totalPages()}</span>
-			<button onclick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages()}>
-				Next
-			</button>
-			<button onclick={() => goToPage(totalPages())} disabled={currentPage === totalPages()}>
-				Last
-			</button>
+			<button onclick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages()}
+				>Next</button
+			>
+			<button onclick={() => goToPage(totalPages())} disabled={currentPage === totalPages()}
+				>Last</button
+			>
 
 			<button onclick={clearCSV} style="margin-left:auto;">Clear Loaded CSV</button>
 		</div>
@@ -142,7 +200,11 @@
 				<thead>
 					<tr>
 						{#each $csvData.headers as h}
-							<th>{h}</th>
+							<th>
+								{h}
+								<br />
+								<small class="meta">{$csvData.columnTypes?.[h] ?? 'string'}</small>
+							</th>
 						{/each}
 					</tr>
 				</thead>
@@ -218,5 +280,34 @@
 	}
 	button {
 		cursor: pointer;
+	}
+	.export-toolbar {
+		margin: 0.75rem 0;
+		padding: 0.5rem;
+		border: 1px solid #e5e5e5;
+		border-radius: 6px;
+		background: #fbfbfb;
+		display: grid;
+		gap: 0.5rem;
+	}
+	.export-actions {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+		align-items: center;
+	}
+	.export-options {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.export-options label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
+	.export-options .checkbox {
+		gap: 0.4rem;
 	}
 </style>
