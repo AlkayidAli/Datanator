@@ -261,8 +261,6 @@
 <svelte:window on:keydown={onKey} on:click={() => (headerMenu = null)} />
 
 <div class="uploader-container">
-	<h2>CSV Uploader (Svelte 5)</h2>
-
 	<input
 		type="file"
 		accept=".csv,text/csv"
@@ -368,7 +366,6 @@
 						{#each $csvData.headers as h}
 							<th class="header-cell" onclick={(e) => handleHeaderClick(h, e)}>{h}</th>
 						{/each}
-						{#if editMode}<th aria-label="row actions"></th>{/if}
 					</tr>
 				</thead>
 				<tbody>
@@ -470,7 +467,7 @@
 		padding: 1rem;
 		border-radius: 8px;
 		background: #fafafa;
-		margin-bottom: 1rem;
+		height: 100vh;
 	}
 	.table-wrapper {
 		overflow: auto;

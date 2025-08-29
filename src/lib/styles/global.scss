@@ -11,6 +11,15 @@ $font-weight-normal: 400;
 $font-weight-bold: 550;
 $font-family-primary: 'Inter', sans-serif;
 
+// Button design tokens
+$btn-radius: 12px;
+$btn-pad-y: 0.55rem;
+$btn-pad-x: 1rem;
+$btn-gap: 0.55rem;
+$btn-shadow: 0 6px 16px rgba(0,0,0,.12);
+$btn-shadow-hover: 0 10px 22px rgba(0,0,0,.18);
+$btn-shadow-active: 0 4px 10px rgba(0,0,0,.10);
+$btn-transition: background-color .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .02s ease;
 
 :global(html, body) {
     margin: 0 !important;
@@ -19,45 +28,89 @@ $font-family-primary: 'Inter', sans-serif;
     font-weight: $font-weight-normal;
 }
 
+// Base button
 :global(button){
-    display: inline-flex;
-    align-items: center;
-    flex-wrap: nowrap;
-    background: transparent;
-    justify-content: center;
-    width: 6em;
-    padding: 0.4em;
-    border: solid 1px;
-    border-radius: 0.5em;
-    font-weight: $font-weight-normal;
-    font-size: 1em;
-    font-family: $font-family-primary;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
+  gap: $btn-gap;
 
+  background: transparent;
+  color: $text-grey-90;
+
+  padding: $btn-pad-y $btn-pad-x;
+  border: 1px solid $text-grey-10;
+  border-radius: $btn-radius;
+
+  font-family: $font-family-primary;
+  font-weight: $font-weight-normal;
+  font-size: 1rem;
+
+  cursor: pointer;
+  user-select: none;
+
+  box-shadow: $btn-shadow;
+  transition: $btn-transition;
 }
 
-    :global(.primary){
-        background-color: $background-primary-color;
-        color: $text-white;
-        border-color: $text-grey-10;
+// Focus, active, disabled
+:global(button:focus-visible) {
+  outline: 3px solid rgba(74,144,226,.6);
+  outline-offset: 2px;
+}
 
-        &:hover{
-            background-color: $background-secondary-color;
-            border-color: $background-primary-color;
-            color: $text-grey-90;
-        }
-    }
-    :global(.secondary){
-        background-color: $background-secondary-color;
-        color: $text-grey-90;
-        border-color: $background-primary-color;
+:global(button:active) {
+  transform: translateY(1px);
+  box-shadow: $btn-shadow-active;
+}
 
-        &:hover{
-            background-color: $background-primary-color;
-            border-color: $background-secondary-color;
-            color: $text-white;
-        }
-    }
+:global(button:disabled),
+:global(button[aria-disabled="true"]) {
+  opacity: .55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
 
+// Icon helpers (works for <svg> or a .icon span)
+:global(button) .icon,
+:global(button) svg {
+  flex: 0 0 auto;
+  width: 1.1em;
+  height: 1.1em;
+}
+
+// Variants
+:global(.primary){
+  background-color: $background-primary-color;
+  color: $text-white;
+  border-color: $text-grey-10;
+
+  &:hover{
+    background-color: $background-secondary-color;
+    border-color: $background-primary-color;
+    color: $text-grey-90;
+    box-shadow: $btn-shadow-hover;
+  }
+}
+
+:global(.secondary){
+  background-color: $background-secondary-color;
+  color: $text-grey-90;
+  border-color: $background-primary-color;
+
+  &:hover{
+    background-color: $background-primary-color;
+    border-color: $background-secondary-color;
+    color: $text-white;
+    box-shadow: $btn-shadow-hover;
+  }
+}
+
+// Respect reduced motion
+@media (prefers-reduced-motion: reduce) {
+  :global(button) { transition: none; }
+}
 
 :global(a){
     text-decoration: none;
