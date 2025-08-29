@@ -261,13 +261,6 @@
 <svelte:window on:keydown={onKey} on:click={() => (headerMenu = null)} />
 
 <div class="uploader-container">
-	<input
-		type="file"
-		accept=".csv,text/csv"
-		onchange={handleFileSelection}
-		aria-label="Upload CSV file"
-	/>
-
 	<button type="button" onclick={() => (showAdvanced = !showAdvanced)}>
 		{#if showAdvanced}Hide Advanced Options{/if}
 		{#if !showAdvanced}Show Advanced Options{/if}
@@ -467,11 +460,11 @@
 		padding: 1rem;
 		border-radius: 8px;
 		background: #fafafa;
-		height: 100vh;
+		height: fit-content;
 	}
 	.table-wrapper {
 		overflow: auto;
-		max-height: 50vh;
+		max-height: 100vh;
 		border: 1px solid #ddd;
 		margin-top: 0.5rem;
 	}
