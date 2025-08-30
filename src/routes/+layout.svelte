@@ -3,7 +3,7 @@
 	import Footer from '$lib/components/footer/footer.svelte';
 	import { page } from '$app/state';
 	import Toast from '$lib/components/toast/toast.svelte';
-	import { csvData } from '$lib/stores/csvData';
+
 	let { children } = $props();
 </script>
 
@@ -13,7 +13,8 @@
 	{@render children()}
 </main>
 
-{#if !$csvData}
+{#if page.url.pathname !== '/csvUploader'}
 	<Footer />
 {/if}
+
 <Toast />
