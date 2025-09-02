@@ -149,6 +149,7 @@
 		background: $background-primary-color;
 		color: $text-white;
 		cursor: pointer;
+		max-width: 13rem;
 
 		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
 		transition:
@@ -210,7 +211,8 @@
 	}
 	.csv-home {
 		padding: 1rem;
-		display: grid;
+		display: flex;
+		flex-direction: column;
 		gap: 0.75rem;
 	}
 
@@ -234,8 +236,9 @@
 		background: rgba(0, 0, 0, 0.6); /* darker transparent */
 		backdrop-filter: blur(8px) saturate(120%);
 		-webkit-backdrop-filter: blur(8px) saturate(120%);
-		display: grid;
-		place-items: center;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		z-index: 10000;
 	}
 
@@ -254,8 +257,10 @@
 		backdrop-filter: blur(18px) saturate(130%);
 		-webkit-backdrop-filter: blur(18px) saturate(130%);
 
-		display: grid;
-		place-items: center;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
 		padding: 1rem;
 		cursor: pointer;
 	}
@@ -266,8 +271,10 @@
 	}
 
 	.dz-content {
-		display: grid;
-		place-items: center;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
 		gap: 0.5rem;
 		color: $text-white; /* readable on dark backdrop */
 		text-align: center;

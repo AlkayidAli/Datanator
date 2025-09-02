@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { parseCSVFile } from '$lib/utils/csv/csv';
 	import { csvData, clearCSV } from '$lib/stores/csvData';
+	import { downloadCSVFromParsed } from '$lib/utils/csv/export';
 
 	import delete_icon from '$lib/common/delete_icon.svg';
 	// Local rune-based state
@@ -9,6 +10,7 @@
 	let showAdvanced = $state(false);
 	let editMode = $state(false);
 	let newColName = $state('');
+	let search = $state(''); // search query for filtering
 
 	let pageSize = $state(25);
 	let currentPage = $state(1);
@@ -19,29 +21,56 @@
 
 	// Context menu for headers
 	let headerMenu = $state<{ header: string; x: number; y: number } | null>(null);
+	let headerMenuEl = $state<HTMLDivElement | null>(null);
 
 	// Row selection (track absolute row indices)
 	let selectedRows = $state(new Set<number>());
 
-	// Derived: total pages depends on $csvData and pageSize
-	const totalPages = $derived(() => {
-		if (!$csvData) return 0;
-		return Math.max(1, Math.ceil($csvData.rows.length / pageSize));
+	// Derived: indices of rows that match search (map to original row indices)
+	const filteredIndex = $derived(() => {
+		if (!$csvData) return [] as number[];
+		const q = search.trim().toLowerCase();
+		if (!q) return $csvData.rows.map((_, i) => i);
+		const { headers, rows } = $csvData;
+		const idx: number[] = [];
+		for (let i = 0; i < rows.length; i++) {
+			const row = rows[i];
+			let hit = false;
+			for (const h of headers) {
+				const v = row[h];
+				if (v != null && String(v).toLowerCase().includes(q)) {
+					hit = true;
+					break;
+				}
+			}
+			if (hit) idx.push(i);
+		}
+		return idx;
 	});
 
-	// Derived: paginated rows slice
+	// Derived: total pages depends on filtered results
+	const totalPages = $derived(() => {
+		if (!$csvData) return 0;
+		const len = filteredIndex().length;
+		return Math.max(1, Math.ceil(len / pageSize));
+	});
+
+	// Derived: paginated rows from filtered indices
 	const paginatedRows = $derived(() => {
 		if (!$csvData) return [];
 		const start = (currentPage - 1) * pageSize;
-		return $csvData.rows.slice(start, start + pageSize);
+		const end = start + pageSize;
+		const slice = filteredIndex().slice(start, end);
+		return slice.map((orig) => $csvData.rows[orig]);
 	});
 
 	// Derived helpers
 	const selectedCount = $derived(() => selectedRows.size);
+	// Absolute row indices (in original dataset) for current page, honoring filter
 	const pageIndices = () => {
 		const start = startIndex();
-		const len = paginatedRows().length;
-		return Array.from({ length: len }, (_, i) => start + i);
+		const end = start + paginatedRows().length;
+		return filteredIndex().slice(start, end);
 	};
 	const pageAllSelected = $derived(() => {
 		const ids = pageIndices();
@@ -55,6 +84,11 @@
 		if ($csvData) {
 			currentPage = 1;
 		}
+	});
+	// Effect: reset to first page when search changes
+	$effect(() => {
+		search;
+		currentPage = 1;
 	});
 
 	// Keep numeric math robust if <select> binds as string
@@ -166,6 +200,11 @@
 
 	// Global key handling: Enter starts editing; Escape clears selection/edit
 	function onKey(e: KeyboardEvent) {
+		// Close header menu with Escape
+		if (e.key === 'Escape' && headerMenu) {
+			headerMenu = null;
+			return;
+		}
 		if (!selectedCell) return;
 		if (e.key === 'Enter') {
 			e.preventDefault();
@@ -196,10 +235,17 @@
 		editingCell = null;
 	}
 
+	function exportCSV() {
+		if ($csvData) downloadCSVFromParsed($csvData);
+	}
+	function clean() {
+		// placeholder for future "clean" action
+	}
+
 	// Toggle a single row checkbox (local index -> absolute index)
 	function toggleRowChecked(localRowIndex: number, checked: boolean) {
 		if (!editMode) return;
-		const abs = startIndex() + localRowIndex;
+		const abs = filteredIndex()[startIndex() + localRowIndex];
 		const next = new Set(selectedRows);
 		if (checked) next.add(abs);
 		else next.delete(abs);
@@ -209,7 +255,7 @@
 	// Select/Deselect all rows on current page
 	function toggleSelectAllPage(checked: boolean) {
 		if (!editMode) return;
-		const ids = pageIndices();
+		const ids = pageIndices(); // already absolute indices
 		const next = new Set(selectedRows);
 		if (checked) ids.forEach((i) => next.add(i));
 		else ids.forEach((i) => next.delete(i));
@@ -256,11 +302,122 @@
 			}
 		};
 	}
+
+	// Focus first menu item when the header menu opens
+	$effect(() => {
+		if (headerMenu) {
+			queueMicrotask(() => {
+				const firstBtn = headerMenuEl?.querySelector('button') as HTMLButtonElement | null;
+				firstBtn?.focus();
+			});
+		}
+	});
+
+	function swallowClick(e: MouseEvent) {
+		e.stopPropagation();
+	}
+
+	// Inline header rename state
+	let editingHeader = $state<string | null>(null);
+	let headerEditValue = $state('');
+	function headerInputId(name: string) {
+		return `header-input-${encodeURIComponent(name)}`;
+	}
+
+	function beginHeaderEdit(h: string) {
+		editingHeader = h;
+		headerEditValue = h;
+		headerMenu = null;
+	}
+
+	// Commit/cancel rename logic
+	function commitHeaderRename(oldName: string, nextRaw: string) {
+		const next = (nextRaw || '').trim();
+		if (!next || next === oldName) {
+			editingHeader = null;
+			return;
+		}
+		// Prevent duplicates
+		if ($csvData && $csvData.headers.includes(next)) {
+			// keep editing so the user can correct
+			return;
+		}
+		csvData.update((d) => {
+			if (!d) return d;
+			const headers = d.headers.map((h) => (h === oldName ? next : h));
+			const rows = d.rows.map((r) => {
+				const { [oldName]: val, ...rest } = r;
+				return { ...rest, [next]: val ?? null };
+			});
+			return { ...d, headers, rows };
+		});
+		editingHeader = null;
+	}
+
+	// Focus the header input when entering edit mode
+	$effect(() => {
+		if (editingHeader) {
+			const id = headerInputId(editingHeader);
+			queueMicrotask(() => {
+				const el = document.getElementById(id) as HTMLInputElement | null;
+				el?.focus();
+				el?.select();
+			});
+		}
+	});
+
+	function onHeaderCellClick(h: string, evt: MouseEvent) {
+		// Don’t open menu while renaming, or when clicking on inputs/buttons inside the cell
+		if (editingHeader === h) return;
+		const target = evt.target as HTMLElement | null;
+		if (target?.closest('input,button')) return;
+		handleHeaderClick(h, evt); // uses evt.clientX/Y and stopPropagation internally
+	}
 </script>
 
-<svelte:window on:keydown={onKey} on:click={() => (headerMenu = null)} />
+<svelte:window onkeydown={onKey} onclick={() => (headerMenu = null)} />
 
 <div class="uploader-container">
+	<!-- Utility header -->
+	<div class="util-bar">
+		<input
+			class="search"
+			type="text"
+			placeholder="Search rows…"
+			bind:value={search}
+			aria-label="Search rows"
+		/>
+
+		<div class="util-actions">
+			<button
+				class="secondary toggle-btn"
+				onclick={() => (editMode = !editMode)}
+				aria-pressed={editMode}
+				title="Toggle edit mode"
+			>
+				<span class="material-symbols-outlined">{editMode ? 'edit_square' : 'edit'}</span>
+				{editMode ? 'Editing' : 'Edit mode'}
+			</button>
+
+			<button class="secondary" onclick={exportCSV} title="Export CSV">
+				<span class="material-symbols-outlined">file_download</span>
+				Export
+			</button>
+			<button onclick={clean} title="Clean (coming soon)">
+				<span class="material-symbols-outlined">cleaning_services</span>
+				Clean
+			</button>
+		</div>
+	</div>
+
+	<!-- Message when search has no matches -->
+	{#if $csvData && search.trim() && filteredIndex().length === 0}
+		<div class="no-results">
+			<span class="material-symbols-outlined">search_off</span>
+			No results for “{search}”
+		</div>
+	{/if}
+
 	<button type="button" onclick={() => (showAdvanced = !showAdvanced)}>
 		{#if showAdvanced}Hide Advanced Options{/if}
 		{#if !showAdvanced}Show Advanced Options{/if}
@@ -280,46 +437,65 @@
 	{/if}
 
 	{#if $csvData}
-		<!-- Manipulation toolbar -->
-		<div class="manip-toolbar">
-			<label class="chk"><input type="checkbox" bind:checked={editMode} /> Edit mode</label>
-			<button class="secondary" onclick={addEmptyRow}>Add row</button>
-			<input placeholder="New column name" bind:value={newColName} />
-			<button class="secondary" onclick={() => addColumn(newColName)} disabled={!newColName.trim()}
-				>Add column</button
-			>
-		</div>
-
-		<div>
+		{#if editMode}
+			<!-- Manipulation toolbar -->
+			<div class="manip-toolbar">
+				<button class="primary add-row-btn" onclick={addEmptyRow}>
+					<span class="material-symbols-outlined">add</span>
+					Add row
+				</button>
+				<div class="add-col-group">
+					<input
+						class="add-col-input"
+						placeholder="New column name…"
+						bind:value={newColName}
+						autocomplete="off"
+						aria-label="New column name"
+					/>
+					<button
+						class="secondary add-col-btn"
+						onclick={() => addColumn(newColName)}
+						disabled={!newColName.trim()}
+					>
+						<span class="material-symbols-outlined">view_column</span>
+						Add column
+					</button>
+				</div>
+			</div>
+		{/if}
+		<div class="file-info">
 			<strong>Loaded File:</strong>
 			{$csvData.filename}<br />
 			<small class="meta">
-				Rows: {$csvData.rows.length} | Columns: {$csvData.headers.length} | Loaded at: {$csvData.loadedAt}
+				Rows: {$csvData.rows.length} | Columns: {$csvData.headers.length}
 			</small>
 		</div>
 
 		<div class="pagination">
-			<label>
-				Rows per page:
-				<!-- bind:value replaced by just value + on:change in Svelte 5? 
-             Svelte 5 still supports bind but we can keep it. -->
-				<select bind:value={pageSize} onchange={() => (currentPage = 1)}>
+			<div class="rows-group">
+				<label class="rows-label" for="rows-per-page"> Rows per page: </label>
+				<select
+					id="rows-per-page"
+					class="rows-select"
+					bind:value={pageSize}
+					onchange={() => (currentPage = 1)}
+				>
 					<option value={10}>10</option>
 					<option value={25}>25</option>
 					<option value={50}>50</option>
 					<option value={100}>100</option>
 				</select>
-			</label>
+			</div>
 
 			<button onclick={() => goToPage(1)} disabled={currentPage === 1}>First</button>
 			<button onclick={() => goToPage(currentPage - 1)} disabled={currentPage === 1}>Prev</button>
 			<span>Page {currentPage} of {totalPages()}</span>
-			<button onclick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages()}
-				>Next</button
-			>
-			<button onclick={() => goToPage(totalPages())} disabled={currentPage === totalPages()}
-				>Last</button
-			>
+			<button onclick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages()}>
+				Next
+			</button>
+			<button onclick={() => goToPage(totalPages())} disabled={currentPage === totalPages()}>
+				Last
+			</button>
 
 			<button onclick={clearCSV} style="margin-left:auto;">Clear Loaded CSV</button>
 		</div>
@@ -356,8 +532,29 @@
 							</th>
 						{/if}
 
+						<!-- header row -->
 						{#each $csvData.headers as h}
-							<th class="header-cell" onclick={(e) => handleHeaderClick(h, e)}>{h}</th>
+							<th
+								class="header-cell"
+								class:editing={editingHeader === h}
+								onclick={(e) => onHeaderCellClick(h, e)}
+							>
+								{#if editingHeader === h}
+									<input
+										id={headerInputId(h)}
+										class="header-input"
+										bind:value={headerEditValue}
+										onkeydown={(e) => {
+											if (e.key === 'Enter') commitHeaderRename(h, headerEditValue);
+											else if (e.key === 'Escape') editingHeader = null;
+										}}
+										onblur={() => commitHeaderRename(h, headerEditValue)}
+										aria-label="Rename column"
+									/>
+								{:else}
+									{h}
+								{/if}
+							</th>
 						{/each}
 					</tr>
 				</thead>
@@ -368,7 +565,7 @@
 								<td class="select-col">
 									<input
 										type="checkbox"
-										checked={selectedRows.has(startIndex() + i)}
+										checked={selectedRows.has(filteredIndex()[startIndex() + i])}
 										onchange={(e) => toggleRowChecked(i, (e.target as HTMLInputElement).checked)}
 										aria-label={`Select row ${startIndex() + i + 1}`}
 									/>
@@ -412,45 +609,47 @@
 				</tbody>
 			</table>
 		</div>
-
-		<!-- Header popover menu -->
-		{#if headerMenu}
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div
-				class="header-menu"
-				style={`left:${headerMenu.x}px; top:${headerMenu.y}px;`}
-				onclick={(e) => e.stopPropagation()}
-			>
-				<button
-					type="button"
-					onclick={() => {
-						if (headerMenu) {
-							renameColumn(headerMenu.header);
-						}
-						headerMenu = null;
-					}}
-				>
-					Edit text
-				</button>
-				<button
-					type="button"
-					class="danger"
-					onclick={() => {
-						if (headerMenu) {
-							deleteColumn(headerMenu.header);
-						}
-						headerMenu = null;
-					}}
-				>
-					Delete
-				</button>
-			</div>
-		{/if}
 	{/if}
 
 	{#if !$csvData}
 		<p style="margin-top:1rem;">No CSV loaded yet. Choose a file above.</p>
+	{/if}
+
+	{#if headerMenu}
+		<!-- svelte-ignore a11y_interactive_supports_focus -->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<div
+			class="header-menu"
+			bind:this={headerMenuEl}
+			style={`left:${headerMenu.x}px; top:${headerMenu.y}px;`}
+			onclick={swallowClick}
+			role="menu"
+			aria-label={`Column ${headerMenu.header} actions`}
+		>
+			<button
+				type="button"
+				class="menu-item"
+				onclick={() => {
+					beginHeaderEdit(headerMenu!.header);
+				}}
+				role="menuitem"
+			>
+				<span class="material-symbols-outlined">edit</span>
+				Edit text
+			</button>
+			<button
+				type="button"
+				class="menu-item danger"
+				onclick={() => {
+					deleteColumn(headerMenu!.header);
+					headerMenu = null;
+				}}
+				role="menuitem"
+			>
+				<span class="material-symbols-outlined">delete</span>
+				Delete column
+			</button>
+		</div>
 	{/if}
 </div>
 
@@ -462,6 +661,53 @@
 		background: #fafafa;
 		height: fit-content;
 	}
+	.util-bar {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.5rem;
+	}
+	.util-bar .search {
+		flex: 1 1 280px;
+		min-width: 220px;
+		padding: 6px 10px;
+		border: 1px solid #ddd;
+		border-radius: 6px;
+	}
+
+	.toggle-btn[aria-pressed='true'] {
+		/* subtle “active” look for edit mode */
+		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+	}
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
+		margin-right: 0.35rem;
+		vertical-align: -3px;
+	}
+
+	.no-results {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		margin: 0.25rem 0 0.5rem;
+		padding: 0.35rem 0.5rem;
+		border: 1px solid #e5e5e5;
+		border-radius: 6px;
+		background: #fffdf5;
+		color: #555;
+	}
+	.no-results .material-symbols-outlined {
+		margin-right: 0.25rem;
+		color: #b26a00;
+	}
+
 	.table-wrapper {
 		overflow: auto;
 		max-height: 100vh;
@@ -489,13 +735,50 @@
 	.pagination {
 		margin: 0.75rem 0;
 		display: flex;
-		gap: 0.5rem;
+		gap: 0.75rem;
 		flex-wrap: wrap;
 		align-items: center;
 	}
-	small.meta {
-		color: #666;
+
+	.rows-group {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.25rem 0.75rem;
+		background: #f6f6f6;
+		border-radius: 8px;
+		border: 1px solid #e1e1e1;
 	}
+
+	.rows-label {
+		font-weight: 500;
+		color: #333;
+		font-size: 1rem;
+		margin-right: 0.1rem;
+	}
+
+	.rows-select {
+		padding: 0.45rem 1.1rem 0.45rem 0.7rem;
+		border: 1px solid #ddd;
+		border-radius: 6px;
+		background: #fff;
+		font-size: 1rem;
+		color: #222;
+		transition: border-color 0.15s;
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+		cursor: pointer;
+	}
+	.rows-select:focus {
+		border-color: #4a90e2;
+		outline: none;
+	}
+	.rows-select option {
+		background: #fff;
+		color: #222;
+		font-size: 1rem;
+		padding: 0.4rem 1rem;
+	}
+
 	.error {
 		color: #b00020;
 		margin-top: 0.5rem;
@@ -506,55 +789,120 @@
 		width: fit-content;
 	}
 	.manip-toolbar {
-		margin: 0.5rem 0;
 		display: flex;
-		gap: 0.5rem;
+		gap: 1rem;
 		flex-wrap: wrap;
 		align-items: center;
+		margin: 0.5rem 0 1rem 0;
 	}
-	.manip-toolbar .chk {
-		display: inline-flex;
-		gap: 0.4rem;
+	.add-row-btn {
+		display: flex;
 		align-items: center;
+		gap: 0.4rem;
+		font-size: 1rem;
+		padding: 0.5rem 1.1rem;
+		border-radius: 8px;
 	}
-
-	td.selected {
-		outline: 2px solid #4a90e2;
-		outline-offset: -2px;
+	.add-col-group {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
 	}
-
-	td input {
-		box-sizing: border-box;
-		padding: 3px 4px;
-		border: 1px solid #4a90e2;
-		border-radius: 3px;
+	.add-col-input {
+		padding: 0.5rem 0.9rem;
+		border: 1px solid #ddd;
+		border-radius: 6px;
+		font-size: 1rem;
+		min-width: 180px;
+		transition: border-color 0.15s;
+	}
+	.add-col-input:focus {
+		border-color: #4a90e2;
+		outline: none;
+	}
+	.add-col-btn {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-size: 1rem;
+		padding: 0.5rem 1.1rem;
+		border-radius: 8px;
+	}
+	.add-col-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 
 	.header-cell {
 		cursor: pointer;
 		user-select: none;
+		white-space: nowrap;
+	}
+	.header-cell.editing {
+		cursor: text;
+	}
+	.header-input {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 4px 6px;
+		border: 1px solid #4a90e2;
+		border-radius: 4px;
+		font: inherit;
+		color: inherit;
+		background: #fff;
 	}
 
 	.header-menu {
-		position: fixed; /* use viewport coordinates from clientX/Y */
-		min-width: 180px;
+		position: fixed; /* anchored to viewport coordinates from clientX/Y */
+		min-width: 200px;
+		max-width: 260px;
 		background: #fff;
-		border: 1px solid #ddd;
-		border-radius: 6px;
-		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+		border: 1px solid #e5e5e5;
+		border-radius: 8px;
+		box-shadow: 0 10px 24px rgba(0, 0, 0, 0.15);
 		padding: 6px;
-		display: grid;
+		display: flex;
+		flex-direction: column;
 		gap: 4px;
 		z-index: 9999;
 	}
-	.header-menu button {
-		padding: 4px 8px;
+	.header-menu .menu-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 10px;
+		border: none;
+		background: transparent;
 		text-align: left;
+		width: 100%;
+		border-radius: 6px;
+		font-size: 0.95rem;
+		color: #222;
+		transition:
+			background-color 0.15s ease,
+			color 0.15s ease;
 	}
-	.header-menu .danger {
+	.header-menu .menu-item:hover,
+	.header-menu .menu-item:focus {
+		background: #f6f6f6;
+		outline: none;
+	}
+	.header-menu .menu-item.danger {
 		color: #a11;
 	}
-
+	.header-menu .menu-item.danger:hover,
+	.header-menu .menu-item.danger:focus {
+		background: #fff3f3;
+	}
+	.header-menu .material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
+	}
 	.select-col {
 		width: 36px;
 		text-align: center;
@@ -584,5 +932,9 @@
 		color: #555;
 		text-decoration: underline;
 		padding: 0;
+	}
+
+	.file-info {
+		padding-top: 0.5rem;
 	}
 </style>

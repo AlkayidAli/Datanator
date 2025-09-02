@@ -7,4 +7,7 @@
 {#if !$csvData}
 	<CsvHome />
 {/if}
-<CsvUploader />
+
+{#if $csvData}
+	<CsvUploader />
+{/if}
