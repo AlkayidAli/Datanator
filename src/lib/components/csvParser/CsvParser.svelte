@@ -31,6 +31,9 @@
 	// Row selection (track absolute row indices)
 	let selectedRows = $state(new Set<number>());
 
+	// Rows highlighted by cleaning tools
+	let highlightedRows = $state(new Set<number>());
+
 	// Derived: indices of rows that match search (map to original row indices)
 	const filteredIndex = $derived(() => {
 		if (!$csvData) return [] as number[];
@@ -565,7 +568,7 @@
 				</thead>
 				<tbody>
 					{#each paginatedRows() as row, i}
-						<tr>
+						<tr class:highlight={highlightedRows.has(filteredIndex()[startIndex() + i])}>
 							{#if editMode}
 								<td class="select-col">
 									<input
@@ -671,6 +674,10 @@
 	{#if showClean && cleanMode}
 		<CleanPanel
 			mode={cleanMode}
+			onHighlightRows={(ids: number[]) => {
+				highlightedRows = new Set(ids);
+				editMode = true;
+			}}
 			onBack={() => {
 				showClean = false;
 				showCleanMenu = true;
@@ -966,5 +973,9 @@
 
 	.file-info {
 		padding-top: 0.5rem;
+	}
+
+	tr.highlight td {
+		background: #fff7cc; /* soft yellow */
 	}
 </style>
