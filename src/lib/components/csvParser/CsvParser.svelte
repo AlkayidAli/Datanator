@@ -5,6 +5,7 @@
 
 	import delete_icon from '$lib/common/delete_icon.svg';
 	import CleanPanel from '$lib/components/CleanPanel/CleanPanel.svelte';
+	import CleanMenu from '$lib/components/CleanPanel/CleanMenu.svelte';
 	// Local rune-based state
 	let isParsing = $state(false);
 	let parseError: string | null = $state(null);
@@ -13,6 +14,8 @@
 	let newColName = $state('');
 	let search = $state(''); // search query for filtering
 	let showClean = $state(false);
+	let showCleanMenu = $state(false);
+	let cleanMode = $state<'duplicates' | 'empty' | 'date' | null>(null);
 
 	let pageSize = $state(25);
 	let currentPage = $state(1);
@@ -405,7 +408,7 @@
 				<span class="material-symbols-outlined">file_download</span>
 				Export
 			</button>
-			<button onclick={() => (showClean = true)} title="Data cleaning">
+			<button onclick={() => (showCleanMenu = true)} title="Data cleaning">
 				<span class="material-symbols-outlined">cleaning_services</span>
 				Clean
 			</button>
@@ -654,8 +657,29 @@
 		</div>
 	{/if}
 
-	{#if showClean}
-		<CleanPanel onClose={() => (showClean = false)} />
+	{#if showCleanMenu}
+		<CleanMenu
+			onClose={() => (showCleanMenu = false)}
+			onSelect={(m) => {
+				cleanMode = m;
+				showCleanMenu = false;
+				showClean = true;
+			}}
+		/>
+	{/if}
+
+	{#if showClean && cleanMode}
+		<CleanPanel
+			mode={cleanMode}
+			onBack={() => {
+				showClean = false;
+				showCleanMenu = true;
+			}}
+			onClose={() => {
+				showClean = false;
+				cleanMode = null;
+			}}
+		/>
 	{/if}
 </div>
 

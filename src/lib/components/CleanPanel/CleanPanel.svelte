@@ -1,7 +1,16 @@
 <script lang="ts">
 	import { csvData } from '$lib/stores/csvData';
 
-	let { onClose } = $props<{ onClose: () => void }>();
+	let { onClose, mode, onBack } = $props<{
+		onClose: () => void;
+		onBack?: () => void;
+		mode: 'duplicates' | 'empty' | 'date';
+	}>();
+	const titles: Record<typeof mode, string> = {
+		duplicates: 'Duplicate finder',
+		empty: 'Empty cells',
+		date: 'Date formatter'
+	};
 
 	// Derived
 	const headers = $derived(() => $csvData?.headers ?? []);
@@ -194,137 +203,150 @@
 <div class="clean-overlay" onclick={onClose}>
 	<div class="clean-panel" onclick={(e) => e.stopPropagation()}>
 		<header class="panel-head">
-			<h3>Data cleaning</h3>
+			<button class="back-btn" onclick={() => (onBack ? onBack() : onClose())} title="Back"
+				>←</button
+			>
+			<h3>{titles[mode]}</h3>
 			<button class="close-btn" onclick={onClose} title="Close">✕</button>
 		</header>
 
-		<section>
-			<h4>Duplicates</h4>
-			<div class="row">
-				<label
-					><input type="checkbox" checked={useAllDup} onclick={() => (useAllDup = !useAllDup)} /> Use
-					all columns</label
+		{#if mode === 'duplicates'}
+			<section>
+				<h4>Duplicates</h4>
+				<div class="row">
+					<label
+						><input type="checkbox" checked={useAllDup} onclick={() => (useAllDup = !useAllDup)} /> Use
+						all columns</label
+					>
+				</div>
+				<select
+					class="multi"
+					multiple
+					size={Math.min(8, headers().length)}
+					disabled={useAllDup}
+					bind:value={dupCols}
 				>
-			</div>
-			<select
-				class="multi"
-				multiple
-				size={Math.min(8, headers().length)}
-				disabled={useAllDup}
-				bind:value={dupCols}
-			>
-				{#each headers() as h}<option value={h}>{h}</option>{/each}
-			</select>
-			<div class="row">
-				<label
-					><input
-						type="checkbox"
-						checked={dupCaseSensitive}
-						onclick={() => (dupCaseSensitive = !dupCaseSensitive)}
-					/> Case sensitive</label
-				>
-			</div>
-			<div class="actions">
-				<button class="secondary" onclick={findDuplicates}>Find</button>
-				<button
-					onclick={removeDuplicatesKeepFirst}
-					title="Remove duplicates keeping the first occurrence">Remove duplicates</button
-				>
-				{#if dupCount !== null}
-					<span class="meta">{dupCount} duplicate{dupCount === 1 ? '' : 's'} found</span>
-				{/if}
-			</div>
-		</section>
-
-		<section>
-			<h4>Empty cells</h4>
-			<div class="row">
-				<label
-					><input
-						type="checkbox"
-						checked={useAllEmpty}
-						onclick={() => (useAllEmpty = !useAllEmpty)}
-					/> Use all columns</label
-				>
-			</div>
-			<select
-				class="multi"
-				multiple
-				size={Math.min(8, headers().length)}
-				disabled={useAllEmpty}
-				bind:value={emptyCols}
-			>
-				{#each headers() as h}<option value={h}>{h}</option>{/each}
-			</select>
-			<div class="actions">
-				<button class="secondary" onclick={findEmpties}>Find</button>
-				<button
-					class="danger"
-					onclick={removeRowsWithEmpties}
-					title="Remove rows that contain empty cells">Remove rows</button
-				>
-				<label class="fill">
-					Fill with:
-					<input class="fill-input" placeholder="e.g. N/A" bind:value={fillValue} />
-				</label>
-				<button onclick={fillEmptyCells} disabled={!fillValue.trim()}>Fill empties</button>
-				{#if emptyCount !== null}
-					<span class="meta">{emptyCount} empty cell{emptyCount === 1 ? '' : 's'} found</span>
-				{/if}
-			</div>
-		</section>
-
-		<section>
-			<h4>Date formatter</h4>
-			<div class="row">
-				<label for="date-col">Column</label>
-				<select id="date-col" bind:value={dateCol}>
-					<option value="" disabled selected>Select a column</option>
 					{#each headers() as h}<option value={h}>{h}</option>{/each}
 				</select>
-			</div>
-			<div class="row">
-				<label for="fmt">Format</label>
-				<select id="fmt" bind:value={outFormat}>
-					<option value="YYYY-MM-DD">YYYY-MM-DD</option>
-					<option value="DD/MM/YYYY">DD/MM/YYYY</option>
-					<option value="MM/DD/YYYY">MM/DD/YYYY</option>
-					<option value="ISO_DATETIME">ISO date-time</option>
-				</select>
-			</div>
-			<div class="row">
-				<label
-					><input
-						type="radio"
-						name="target"
-						value="add"
-						checked={target === 'add'}
-						onclick={() => (target = 'add')}
-					/> Add as new column</label
-				>
-				<label
-					><input
-						type="radio"
-						name="target"
-						value="replace"
-						checked={target === 'replace'}
-						onclick={() => (target = 'replace')}
-					/> Replace original</label
-				>
-			</div>
-			{#if target === 'add'}
 				<div class="row">
-					<label for="new-name">New column name</label>
-					<input id="new-name" placeholder="Defaults to <col>_formatted" bind:value={newColName} />
+					<label
+						><input
+							type="checkbox"
+							checked={dupCaseSensitive}
+							onclick={() => (dupCaseSensitive = !dupCaseSensitive)}
+						/> Case sensitive</label
+					>
 				</div>
-			{/if}
-			<div class="actions">
-				<button onclick={applyDateFormat} disabled={!dateCol}>Apply</button>
-			</div>
-			<p class="hint">
-				Note: parsing uses the browser Date parser; only valid dates will be formatted.
-			</p>
-		</section>
+				<div class="actions">
+					<button class="secondary" onclick={findDuplicates}>Find</button>
+					<button
+						onclick={removeDuplicatesKeepFirst}
+						title="Remove duplicates keeping the first occurrence">Remove duplicates</button
+					>
+					{#if dupCount !== null}<span class="meta"
+							>{dupCount} duplicate{dupCount === 1 ? '' : 's'} found</span
+						>{/if}
+				</div>
+			</section>
+		{/if}
+
+		{#if mode === 'empty'}
+			<section>
+				<h4>Empty cells</h4>
+				<div class="row">
+					<label
+						><input
+							type="checkbox"
+							checked={useAllEmpty}
+							onclick={() => (useAllEmpty = !useAllEmpty)}
+						/> Use all columns</label
+					>
+				</div>
+				<select
+					class="multi"
+					multiple
+					size={Math.min(8, headers().length)}
+					disabled={useAllEmpty}
+					bind:value={emptyCols}
+				>
+					{#each headers() as h}<option value={h}>{h}</option>{/each}
+				</select>
+				<div class="actions">
+					<button class="secondary" onclick={findEmpties}>Find</button>
+					<button
+						class="danger"
+						onclick={removeRowsWithEmpties}
+						title="Remove rows that contain empty cells">Remove rows</button
+					>
+					<label class="fill">
+						Fill with:
+						<input class="fill-input" placeholder="e.g. N/A" bind:value={fillValue} />
+					</label>
+					<button onclick={fillEmptyCells} disabled={!fillValue.trim()}>Fill empties</button>
+					{#if emptyCount !== null}<span class="meta"
+							>{emptyCount} empty cell{emptyCount === 1 ? '' : 's'} found</span
+						>{/if}
+				</div>
+			</section>
+		{/if}
+
+		{#if mode === 'date'}
+			<section>
+				<h4>Date formatter</h4>
+				<div class="row">
+					<label for="date-col">Column</label>
+					<select id="date-col" bind:value={dateCol}>
+						<option value="" disabled selected>Select a column</option>
+						{#each headers() as h}<option value={h}>{h}</option>{/each}
+					</select>
+				</div>
+				<div class="row">
+					<label for="fmt">Format</label>
+					<select id="fmt" bind:value={outFormat}>
+						<option value="YYYY-MM-DD">YYYY-MM-DD</option>
+						<option value="DD/MM/YYYY">DD/MM/YYYY</option>
+						<option value="MM/DD/YYYY">MM/DD/YYYY</option>
+						<option value="ISO_DATETIME">ISO date-time</option>
+					</select>
+				</div>
+				<div class="row">
+					<label
+						><input
+							type="radio"
+							name="target"
+							value="add"
+							checked={target === 'add'}
+							onclick={() => (target = 'add')}
+						/> Add as new column</label
+					>
+					<label
+						><input
+							type="radio"
+							name="target"
+							value="replace"
+							checked={target === 'replace'}
+							onclick={() => (target = 'replace')}
+						/> Replace original</label
+					>
+				</div>
+				{#if target === 'add'}
+					<div class="row">
+						<label for="new-name">New column name</label>
+						<input
+							id="new-name"
+							placeholder="Defaults to &lt;col&gt;_formatted"
+							bind:value={newColName}
+						/>
+					</div>
+				{/if}
+				<div class="actions">
+					<button onclick={applyDateFormat} disabled={!dateCol}>Apply</button>
+				</div>
+				<p class="hint">
+					Note: parsing uses the browser Date parser; only valid dates will be formatted.
+				</p>
+			</section>
+		{/if}
 
 		<footer class="panel-foot">
 			<span class="meta">{rowCount()} rows</span>
@@ -373,6 +395,13 @@
 		background: #f8f8f8;
 		padding: 0.35rem 0.6rem;
 		border-radius: 6px;
+	}
+	.back-btn {
+		border: 1px solid #ddd;
+		background: #f8f8f8;
+		padding: 0.35rem 0.6rem;
+		border-radius: 6px;
+		margin-right: 8px;
 	}
 	section {
 		border: 1px solid #eee;
