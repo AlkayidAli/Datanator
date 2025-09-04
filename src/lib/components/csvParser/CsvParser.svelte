@@ -4,6 +4,7 @@
 	import { downloadCSVFromParsed } from '$lib/utils/csv/export';
 
 	import delete_icon from '$lib/common/delete_icon.svg';
+	import CleanPanel from '$lib/components/CleanPanel/CleanPanel.svelte';
 	// Local rune-based state
 	let isParsing = $state(false);
 	let parseError: string | null = $state(null);
@@ -11,6 +12,7 @@
 	let editMode = $state(false);
 	let newColName = $state('');
 	let search = $state(''); // search query for filtering
+	let showClean = $state(false);
 
 	let pageSize = $state(25);
 	let currentPage = $state(1);
@@ -403,7 +405,7 @@
 				<span class="material-symbols-outlined">file_download</span>
 				Export
 			</button>
-			<button onclick={clean} title="Clean (coming soon)">
+			<button onclick={() => (showClean = true)} title="Data cleaning">
 				<span class="material-symbols-outlined">cleaning_services</span>
 				Clean
 			</button>
@@ -650,6 +652,10 @@
 				Delete column
 			</button>
 		</div>
+	{/if}
+
+	{#if showClean}
+		<CleanPanel onClose={() => (showClean = false)} />
 	{/if}
 </div>
 
