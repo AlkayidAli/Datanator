@@ -82,7 +82,8 @@
 	}
 	.menu-item {
 		display: flex;
-		align-items: start;
+		align-items: center;
+		justify-content: start;
 		gap: 10px;
 		width: 100%;
 		text-align: left;
@@ -108,7 +109,7 @@
 			'wght' 500,
 			'GRAD' 0,
 			'opsz' 24;
-		font-size: 22px;
+		font-size: 32px;
 		line-height: 1;
 		margin-top: 2px;
 	}

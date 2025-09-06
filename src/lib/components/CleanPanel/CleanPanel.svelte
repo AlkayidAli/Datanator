@@ -41,7 +41,9 @@
 	// confirm dialog for deleting rows with empty cells
 	let showEmptyDeleteConfirm = $state(false);
 
-	let dateCol = $state<string>('');
+	// Date formatter state
+	let useAllDate = $state(true);
+	let dateCols = $state<string[]>([]);
 	let outFormat = $state<'YYYY-MM-DD' | 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'ISO_DATETIME'>('YYYY-MM-DD');
 	let target = $state<'add' | 'replace'>('add');
 	let newColName = $state<string>('');
@@ -49,6 +51,80 @@
 	// Derived from store
 	const headers = $derived(() => $csvData?.headers ?? []);
 	const rowCount = $derived(() => $csvData?.rows.length ?? 0);
+
+	// Fast date eligibility (no full scan)
+	const DATE_SAMPLE_ROWS = 400;
+	const DATE_MIN_TESTS = 12;
+	const DATE_MIN_PASSES = 6;
+	const DATE_MIN_PASS_RATIO = 0.6;
+
+	function looksDateish(s: string) {
+		// cheap precheck to avoid Date.parse on random strings
+		return /[0-9]/.test(s) && (/[\/\-\.:]/.test(s) || /[TtZz]/.test(s) || /[A-Za-z]{3,}/.test(s));
+	}
+	function isParsableDateFast(v: unknown): boolean {
+		if (v == null || v === '') return false;
+		if (v instanceof Date) return !isNaN(v.getTime());
+		const s = String(v).trim();
+		if (!looksDateish(s)) return false;
+		return !isNaN(Date.parse(s));
+	}
+
+	let dateEligible = $state<string[]>([]);
+
+	function recomputeDateEligible() {
+		if (!$csvData) {
+			dateEligible = [];
+			return;
+		}
+		const hdrs = $csvData.headers;
+		const n = $csvData.rows.length;
+		const eligible: string[] = [];
+
+		outer: for (const h of hdrs) {
+			let tested = 0,
+				passes = 0;
+			for (let i = 0; i < n && tested < DATE_SAMPLE_ROWS; i++) {
+				const v = $csvData.rows[i][h];
+				if (v == null || v === '') continue;
+				tested++;
+				if (isParsableDateFast(v)) passes++;
+
+				// early reject if it's mathematically impossible to hit thresholds
+				if (tested >= DATE_MIN_TESTS) {
+					const remaining = DATE_SAMPLE_ROWS - tested;
+					const maxPossiblePasses = passes + remaining;
+					if (maxPossiblePasses < DATE_MIN_PASSES) continue outer;
+					if (
+						passes / tested < DATE_MIN_PASS_RATIO &&
+						tested - passes > DATE_MIN_TESTS * (1 - DATE_MIN_PASS_RATIO)
+					) {
+						continue outer;
+					}
+				}
+			}
+			if (
+				passes >= DATE_MIN_PASSES ||
+				(tested >= DATE_MIN_TESTS && passes / tested >= DATE_MIN_PASS_RATIO)
+			) {
+				eligible.push(h);
+			}
+		}
+		dateEligible = eligible;
+		// keep user selections valid
+		if (!useAllDate) dateCols = dateCols.filter((c) => eligible.includes(c));
+	}
+
+	// trigger compute when opening the Date tool or data changes
+	$effect(() => {
+		// touching these makes the effect aware of changes
+		props.mode;
+		$csvData?.headers;
+		$csvData?.rows.length;
+		if (props.mode === 'date') queueMicrotask(recomputeDateEligible);
+	});
+
+	const dateHeadersView = $derived(() => (dateEligible.length ? dateEligible : headers()));
 
 	// Helpers
 	function asKey(val: unknown, caseSensitive: boolean) {
@@ -321,17 +397,53 @@
 		}
 	}
 	function applyDateFormat() {
-		if (!$csvData || !dateCol) return;
-		const col = dateCol;
-		const defaultNew = `${col}_formatted`;
-		const finalNew = newColName.trim() || defaultNew;
-		if (target === 'add' && !$csvData.headers.includes(finalNew)) insertColumnAfter(col, finalNew);
+		if (!$csvData) return;
+		// Use only eligible headers for performance and accuracy
+		const pool = dateEligible.length ? dateEligible : $csvData.headers;
+		const cols = useAllDate ? pool : dateCols;
+		if (cols.length === 0) return;
+
+		// Prepare new columns if adding
+		if (target === 'add') {
+			for (const col of cols) {
+				const name =
+					cols.length === 1 && !useAllDate && newColName.trim()
+						? newColName.trim()
+						: `${col}_formatted`;
+				if (!$csvData.headers.includes(name)) {
+					insertColumnAfter(col, name);
+				}
+			}
+		}
+
+		// Map of original -> destination (when adding)
+		const destName: Record<string, string> = {};
+		if (target === 'add') {
+			for (const col of cols) {
+				destName[col] =
+					cols.length === 1 && !useAllDate && newColName.trim()
+						? newColName.trim()
+						: `${col}_formatted`;
+			}
+		}
+
 		csvData.update((d) => {
 			if (!d) return d;
 			const rows = d.rows.map((r) => {
-				const formatted = formatDate(r[col]);
-				if (formatted == null) return r;
-				return target === 'replace' ? { ...r, [col]: formatted } : { ...r, [finalNew]: formatted };
+				let copy = r;
+				for (const col of cols) {
+					const formatted = formatDate(r[col]);
+					if (formatted == null) continue;
+					if (target === 'replace') {
+						if (copy === r) copy = { ...r };
+						copy[col] = formatted as any;
+					} else {
+						const name = destName[col];
+						if (copy === r) copy = { ...r };
+						copy[name] = formatted as any;
+					}
+				}
+				return copy;
 			});
 			return { ...d, rows };
 		});
@@ -343,6 +455,9 @@
 	}
 	function toggleEmptyCol(h: string) {
 		emptyCols = emptyCols.includes(h) ? emptyCols.filter((x) => x !== h) : [...emptyCols, h];
+	}
+	function toggleDateCol(h: string) {
+		dateCols = dateCols.includes(h) ? dateCols.filter((x) => x !== h) : [...dateCols, h];
 	}
 
 	// a11y: keyboard close for overlay
@@ -374,8 +489,8 @@
 	>
 		<header class="panel-head">
 			<button class="back-btn" onclick={back} title="Back">←</button>
-			<h3>{panelTitle()}</h3>
 			<button class="close-btn" onclick={close} title="Close">✕</button>
+			<h3>{panelTitle()}</h3>
 		</header>
 
 		{#if props.mode === 'duplicates'}
@@ -551,20 +666,48 @@
 			<section>
 				<h4>Date formatter</h4>
 				<div class="row">
-					<label for="date-col">Column</label>
-					<select id="date-col" bind:value={dateCol}>
-						<option value="" disabled selected>Select a column</option>
-						{#each headers() as h}<option value={h}>{h}</option>{/each}
-					</select>
+					<label>
+						<input
+							type="checkbox"
+							checked={useAllDate}
+							onclick={() => (useAllDate = !useAllDate)}
+						/>
+						Use all columns
+					</label>
 				</div>
+				<div class="col-list" aria-label="Columns to format as dates">
+					{#each dateHeadersView() as h}
+						<label class="col-item">
+							<input
+								type="checkbox"
+								checked={dateCols.includes(h)}
+								disabled={useAllDate}
+								onclick={() => toggleDateCol(h)}
+							/>
+							<span class="col-name">{h}</span>
+						</label>
+					{/each}
+				</div>
+
 				<div class="row">
 					<label for="fmt">Format</label>
-					<select id="fmt" bind:value={outFormat}>
-						<option value="YYYY-MM-DD">YYYY-MM-DD</option>
-						<option value="DD/MM/YYYY">DD/MM/YYYY</option>
-						<option value="MM/DD/YYYY">MM/DD/YYYY</option>
-						<option value="ISO_DATETIME">ISO date-time</option>
-					</select>
+					<div class="select-wrap">
+						<select
+							id="fmt"
+							class="select"
+							bind:value={outFormat}
+							aria-label="Date format"
+							disabled={target === 'replace'}
+							title={target === 'replace' ? 'Disabled when replacing original column' : undefined}
+						>
+							<option value="YYYY-MM-DD">YYYY-MM-DD</option>
+							<option value="DD/MM/YYYY">DD/MM/YYYY</option>
+							<option value="MM/DD/YYYY">MM/DD/YYYY</option>
+							<option value="ISO_DATETIME">ISO date-time</option>
+						</select>
+						<span class="select-icon material-symbols-outlined" aria-hidden="true">expand_more</span
+						>
+					</div>
 				</div>
 				<div class="row">
 					<label
@@ -586,7 +729,7 @@
 						/> Replace original</label
 					>
 				</div>
-				{#if target === 'add'}
+				{#if target === 'add' && !useAllDate && dateCols.length === 1}
 					<div class="row">
 						<label for="new-name">New column name</label>
 						<input
@@ -597,7 +740,12 @@
 					</div>
 				{/if}
 				<div class="actions">
-					<button onclick={applyDateFormat} disabled={!dateCol}>Apply</button>
+					<button
+						onclick={applyDateFormat}
+						disabled={useAllDate ? headers().length === 0 : dateCols.length === 0}
+					>
+						Apply
+					</button>
 				</div>
 				<p class="hint">
 					Note: parsing uses the browser Date parser; only valid dates will be formatted.
@@ -654,10 +802,10 @@
 		background: #f8f8f8;
 		padding: 0.35rem 0.6rem;
 		border-radius: 6px;
+		width: 32px;
+		height: 32px;
 	}
-	.back-btn {
-		margin-right: 8px;
-	}
+
 	section {
 		border: 1px solid #eee;
 		border-radius: 10px;
@@ -798,5 +946,54 @@
 		border: 1px dashed #e0bcbc;
 		border-radius: 8px;
 		background: #fff;
+	}
+
+	/* Styled select to match site UI */
+	.select-wrap {
+		position: relative;
+		width: 240px;
+		max-width: 100%;
+	}
+	.select {
+		appearance: none;
+		-webkit-appearance: none;
+		width: 100%;
+		padding: 0.45rem 2rem 0.45rem 0.6rem;
+		border: 1px solid #ddd;
+		border-radius: 8px;
+		background: #fff;
+		font: inherit;
+		color: #222;
+		line-height: 1.2;
+		transition:
+			border-color 0.15s ease,
+			box-shadow 0.15s ease,
+			background-color 0.15s ease;
+	}
+	.select:hover {
+		border-color: #cfcfcf;
+	}
+	.select:focus {
+		outline: none;
+		border-color: #4a90e2;
+		box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.2);
+	}
+	.select:disabled {
+		background: #f5f5f5;
+		border-color: #eee;
+		color: #888;
+		cursor: not-allowed;
+	}
+	.select[disabled] + .select-icon {
+		opacity: 0.5;
+	}
+	.select-icon {
+		position: absolute;
+		right: 8px;
+		top: 50%;
+		transform: translateY(-50%);
+		pointer-events: none;
+		color: #666;
+		font-size: 18px;
 	}
 </style>
