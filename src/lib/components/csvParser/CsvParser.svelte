@@ -33,6 +33,11 @@
 
 	// Rows highlighted by cleaning tools
 	let highlightedRows = $state(new Set<number>());
+	// Individual cells highlighted by cleaning tools (rowIndex::header)
+	let highlightedCells = $state(new Set<string>());
+	function cellKey(absRow: number, header: string) {
+		return `${absRow}::${header}`;
+	}
 
 	// Derived: indices of rows that match search (map to original row indices)
 	const filteredIndex = $derived(() => {
@@ -585,6 +590,9 @@
 									class:selected={selectedCell &&
 										selectedCell.rowLocal === i &&
 										selectedCell.header === h}
+									class:cell-highlight={highlightedCells.has(
+										cellKey(filteredIndex()[startIndex() + i], h)
+									)}
 									onclick={() => handleCellClick(i, h)}
 								>
 									{#if editingCell && editingCell.rowLocal === i && editingCell.header === h}
@@ -676,6 +684,10 @@
 			mode={cleanMode}
 			onHighlightRows={(ids: number[]) => {
 				highlightedRows = new Set(ids);
+				editMode = true;
+			}}
+			onHighlightEmptyCells={(cells) => {
+				highlightedCells = new Set(cells.map((c) => cellKey(c.row, c.col)));
 				editMode = true;
 			}}
 			onBack={() => {
@@ -977,5 +989,8 @@
 
 	tr.highlight td {
 		background: #fff7cc; /* soft yellow */
+	}
+	td.cell-highlight {
+		background: #ffeaea; /* soft red tint for empty cells */
 	}
 </style>

@@ -9,6 +9,7 @@
 		onClose: () => void;
 		onBack?: () => void;
 		onHighlightRows?: (ids: number[]) => void;
+		onHighlightEmptyCells?: (cells: { row: number; col: string }[]) => void;
 	}>();
 
 	function close() {
@@ -37,6 +38,8 @@
 	let emptyCols = $state<string[]>([]);
 	let emptyCount = $state<number | null>(null);
 	let fillValue = $state<string>('');
+	// confirm dialog for deleting rows with empty cells
+	let showEmptyDeleteConfirm = $state(false);
 
 	let dateCol = $state<string>('');
 	let outFormat = $state<'YYYY-MM-DD' | 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'ISO_DATETIME'>('YYYY-MM-DD');
@@ -215,6 +218,21 @@
 	function isEmpty(v: unknown) {
 		return v == null || v === '';
 	}
+	// Build the list of empty cells for current selection
+	function computeEmptyCells(): { row: number; col: string }[] {
+		if (!$csvData) return [];
+		const cols = useAllEmpty ? $csvData.headers : emptyCols;
+		if (cols.length === 0) return [];
+		const result: { row: number; col: string }[] = [];
+		for (let i = 0; i < $csvData.rows.length; i++) {
+			const r = $csvData.rows[i];
+			for (const h of cols) {
+				if (isEmpty(r[h])) result.push({ row: i, col: h });
+			}
+		}
+		return result;
+	}
+
 	function computeEmptyCount(): number {
 		if (!$csvData) return 0;
 		const cols = useAllEmpty ? $csvData.headers : emptyCols;
@@ -226,6 +244,19 @@
 	function findEmpties() {
 		emptyCount = computeEmptyCount();
 	}
+
+	// Highlight empty cells and put table in edit mode (handled by parent)
+	function highlightEmptyCells() {
+		const cells = computeEmptyCells();
+		if (cells.length === 0) {
+			emptyCount = 0;
+			return;
+		}
+		props.onHighlightEmptyCells?.(cells);
+		close();
+	}
+
+	// Delete rows that contain empties (confirm UI below)
 	function removeRowsWithEmpties() {
 		if (!$csvData) return;
 		const cols = useAllEmpty ? $csvData.headers : emptyCols;
@@ -236,16 +267,22 @@
 			return { ...d, rows };
 		});
 		emptyCount = computeEmptyCount();
+		showEmptyDeleteConfirm = false; // close confirmation after applying
 	}
+	// Mass fill empties
+	let replaceMode = $state<'null' | 'value'>('value');
 	function fillEmptyCells() {
 		if (!$csvData) return;
 		const cols = useAllEmpty ? $csvData.headers : emptyCols;
 		if (cols.length === 0) return;
+		// Use the literal string "null" when selected
+		const replacement = replaceMode === 'null' ? 'null' : String(fillValue);
+		if (replaceMode === 'value' && !String(fillValue).trim()) return;
 		csvData.update((d) => {
 			if (!d) return d;
 			const rows = d.rows.map((r) => {
 				const copy = { ...r };
-				for (const h of cols) if (isEmpty(copy[h])) copy[h] = fillValue;
+				for (const h of cols) if (isEmpty(copy[h])) copy[h] = replacement as any;
 				return copy;
 			});
 			return { ...d, rows };
@@ -420,6 +457,7 @@
 						/> Use all columns</label
 					>
 				</div>
+
 				<div class="col-list" aria-label="Columns to check for empty cells">
 					{#each headers() as h}
 						<label class="col-item">
@@ -433,25 +471,79 @@
 						</label>
 					{/each}
 				</div>
+
 				<div class="actions">
 					<button class="secondary" onclick={findEmpties}>Find</button>
 					<button
-						class="danger"
-						onclick={removeRowsWithEmpties}
-						title="Remove rows that contain empty cells">Remove rows</button
+						onclick={highlightEmptyCells}
+						title="Highlight empty cells in the table and enable edit mode"
 					>
-					<label class="fill"
-						>Fill with: <input
+						Highlight and edit
+					</button>
+				</div>
+
+				<!-- Mass replace -->
+				<div class="replace-box" role="group" aria-label="Fill empty cells">
+					<strong>Fill empties</strong>
+					<label>
+						<input
+							type="radio"
+							name="replaceMode"
+							value="null"
+							checked={replaceMode === 'null'}
+							onclick={() => (replaceMode = 'null')}
+						/>
+						Use "null" (text)
+					</label>
+					<label class="fill">
+						<input
+							type="radio"
+							name="replaceMode"
+							value="value"
+							checked={replaceMode === 'value'}
+							onclick={() => (replaceMode = 'value')}
+						/>
+						<span>Custom value</span>
+						<input
 							class="fill-input"
 							placeholder="e.g. N/A"
 							bind:value={fillValue}
-						/></label
+							disabled={replaceMode === 'null'}
+						/>
+					</label>
+					<button onclick={fillEmptyCells} disabled={replaceMode === 'value' && !fillValue.trim()}
+						>Apply fill</button
 					>
-					<button onclick={fillEmptyCells} disabled={!fillValue.trim()}>Fill empties</button>
-					{#if emptyCount !== null}<span class="meta"
-							>{emptyCount} empty cell{emptyCount === 1 ? '' : 's'} found</span
-						>{/if}
 				</div>
+
+				<!-- Dangerous: delete rows containing empties -->
+				<div class="danger-box">
+					<button
+						class="danger"
+						onclick={() => (showEmptyDeleteConfirm = true)}
+						title="Delete rows that contain empty cells"
+					>
+						Delete rows with empty cells
+					</button>
+					{#if showEmptyDeleteConfirm}
+						<div class="confirm">
+							<p>
+								Are you sure? This will permanently remove all rows that contain empty cells in the
+								selected columns.
+							</p>
+							<div class="actions">
+								<button class="secondary" onclick={() => (showEmptyDeleteConfirm = false)}
+									>Cancel</button
+								>
+								<button class="danger" onclick={removeRowsWithEmpties}>Confirm delete</button>
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				{#if emptyCount !== null}
+					<span class="meta">{emptyCount} empty cell{emptyCount === 1 ? '' : 's'} found</span>
+				{/if}
 			</section>
 		{/if}
 
@@ -543,6 +635,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
+		overflow-y: auto; /* allow scrolling inside the panel */
+		-webkit-overflow-scrolling: touch;
 	}
 	.panel-head,
 	.panel-foot {
@@ -660,5 +754,49 @@
 		border: 1px dashed #e0e0e0;
 		border-radius: 10px;
 		background: #fffef8;
+	}
+
+	/* Replace box for empty cells */
+	.replace-box {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+		padding: 8px;
+		border: 1px solid #e6e6e6;
+		border-radius: 10px;
+		background: #fff;
+	}
+	.replace-box strong {
+		font-size: 1rem;
+		color: #333;
+	}
+	.replace-box label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.replace-box input[type='radio'] {
+		width: 16px;
+		height: 16px;
+	}
+	.replace-box .fill-input {
+		flex: 1;
+	}
+
+	/* Danger box for delete confirmation */
+	.danger-box {
+		margin-top: 4px;
+		padding: 8px;
+		border: 1px solid #f0d3d3;
+		border-radius: 10px;
+		background: #fff7f7;
+	}
+	.danger-box .confirm {
+		margin-top: 6px;
+		padding: 8px;
+		border: 1px dashed #e0bcbc;
+		border-radius: 8px;
+		background: #fff;
 	}
 </style>
