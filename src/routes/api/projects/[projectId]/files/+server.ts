@@ -39,5 +39,5 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
     [userId, name.trim(), originalFilename ?? null, params.projectId, JSON.stringify(snapshot)]
   );
   if (!rows.length) return new Response('Not found or not a member', { status: 404 });
-  return new Response(rows[0].file, { headers: { 'content-type': 'application/json' } });
+  return new Response(JSON.stringify(rows[0].file), { headers: { 'content-type': 'application/json' } });
 };

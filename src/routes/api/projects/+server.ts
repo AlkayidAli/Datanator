@@ -32,5 +32,5 @@ export const POST: RequestHandler = async ({ request, locals }) => {
      RETURNING (SELECT row_to_json(p) FROM p) AS project`,
     [userId, name.trim()]
   );
-  return new Response(rows[0].project, { headers: { 'content-type': 'application/json' } });
+  return new Response(JSON.stringify(rows[0].project), { headers: { 'content-type': 'application/json' } });
 };

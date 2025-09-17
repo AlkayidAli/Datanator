@@ -4,6 +4,14 @@
 	import { csvData } from '$lib/stores/csvData';
 	import UploadIcon from '$lib/common/upload_icon.svg';
 
+	// project-aware imports
+	import ProjectBar from '$lib/components/projects/ProjectBar.svelte';
+	import { currentProject, activeFileId } from '$lib/stores/project';
+	import { setFileState } from '$lib/stores/csvMulti';
+
+	// Allow the page to hide the internal ProjectBar
+	const props = $props<{ showProjectBar?: boolean }>();
+
 	let isParsing = $state(false);
 	let parseError: string | null = $state(null);
 
@@ -14,13 +22,43 @@
 	// Hidden input ref (programmatic open)
 	let fileInputRef = $state<HTMLInputElement | null>(null);
 
+	// Upload handler: if a project is selected, create a project file with initial snapshot.
+	// Otherwise, keep previous local-only behavior.
 	async function processFile(file: File) {
 		isParsing = true;
 		parseError = null;
 		try {
 			const parsed = await parseCSVFile(file, { useHeader: true });
-			csvData.set(parsed); // single source of truth (persists to localStorage)
-			await goto('/csvUploader'); // open the parser UI
+
+			if ($currentProject) {
+				// Save to server as a new file in the selected project
+				const res = await fetch(`/api/projects/${$currentProject.project_id}/files`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({
+						name: file.name,
+						originalFilename: file.name,
+						snapshot: parsed
+					})
+				});
+				if (!res.ok) {
+					// Fallback to local if server rejects
+					console.warn('Failed to create project file, falling back to local edit');
+					csvData.set(parsed);
+					await goto('/csvUploader');
+					return;
+				}
+				const created = await res.json(); // { file_id, name, ... }
+
+				// Seed the app state for the editor, then go to the editor page
+				setFileState(created.file_id, { ...parsed, loadedAt: new Date().toISOString() });
+				activeFileId.set(created.file_id);
+				await goto('/csvUploader');
+			} else {
+				// Local-only flow (unchanged)
+				csvData.set(parsed);
+				await goto('/csvUploader');
+			}
 		} catch (err: any) {
 			parseError = err?.message ?? 'Failed to load CSV';
 		} finally {
@@ -70,10 +108,20 @@
 </script>
 
 <div class="csv-home">
+	<!-- Project selector (can be hidden by parent) -->
+	{#if props.showProjectBar !== false}
+		<ProjectBar />
+	{/if}
+
 	<h1>CSV Upload</h1>
 	<p>
-		To get started Upload a csv file. Your data will not be saved in our database, it is local to
-		your browser.
+		{#if $currentProject}
+			Uploads will be saved to your project
+			<strong>{$currentProject.name}</strong> and available from any device.
+		{:else}
+			To get started, upload a CSV file. Your data will not be saved in our database; it stays in
+			your browser.
+		{/if}
 	</p>
 
 	<!-- Trigger button -->
@@ -87,7 +135,6 @@
 
 	<!-- Hidden input used by both the button and the dropzone -->
 	<!-- svelte-ignore event_directive_deprecated -->
-	<!-- svelte-ignore event_directive_deprecated -->
 	<input
 		bind:this={fileInputRef}
 		type="file"
@@ -99,17 +146,10 @@
 
 	{#if isParsing}<p>Loading file…</p>{/if}
 	{#if parseError}<p class="error">{parseError}</p>{/if}
-
-	<h3>Keep this in mind</h3>
-	<p>ADD THE GUIDE OF USE LATER***</p>
 </div>
 
 <!-- Overlay with dropzone -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore event_directive_deprecated -->
 {#if showDrop}
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_interactive_supports_focus -->
 	<div class="overlay" on:click={closeOverlay}>
 		<div
@@ -135,59 +175,31 @@
 	</div>
 {/if}
 
-<style lang="scss">
-	@use '../../styles/global.scss' as *;
-
+<style>
 	.upload-button {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.6rem;
-
 		padding: 0.85rem 1.1rem;
 		border-radius: 12px;
-		border: 1px solid $text-grey-10;
-		background: $background-primary-color;
-		color: $text-white;
+		border: 1px solid #ddd;
+		background: #0b5fff;
+		color: white;
 		cursor: pointer;
-		max-width: 13rem;
-
 		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
-		transition:
-			background-color 0.15s ease,
-			color 0.15s ease,
-			transform 0.02s ease,
-			box-shadow 0.15s ease;
-
-		/* optional: fix width/height similar to your previous version */
 		min-width: 12rem;
 	}
-
 	.upload-button:hover {
-		background: $background-secondary-color;
-		color: $text-grey-90;
-		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+		background: #407dff;
 	}
-
-	.upload-button:active {
-		transform: translateY(1px);
-	}
-	.upload-button:focus-visible {
-		outline: 3px solid rgba(74, 144, 226, 0.6);
-		outline-offset: 2px;
-	}
-
-	/* Icon uses CSS mask and inherits currentColor */
 	.upload-button .icon {
 		display: inline-block;
 		width: 36px;
 		height: 36px;
 		background-color: currentColor;
-
-		/* shorthand ensures repeat/position/size are set */
 		-webkit-mask: var(--icon-url) no-repeat center / contain;
 		mask: var(--icon-url) no-repeat center / contain;
 	}
-
 	.upload-button .label {
 		line-height: 1.1;
 		font-weight: 550;
@@ -195,28 +207,6 @@
 		text-align: left;
 	}
 
-	/* Optional fallback if mask isn’t supported (older browsers) */
-	@supports not (mask: url('')) {
-		.upload-button .icon {
-			background-color: transparent;
-			background-image: var(--icon-url);
-			background-repeat: no-repeat;
-			background-position: center;
-			background-size: contain;
-		}
-	}
-
-	.browse-btn {
-		width: 8rem;
-	}
-	.csv-home {
-		padding: 1rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	/* Hide the actual input but keep it accessible for screen readers if needed */
 	.visually-hidden {
 		position: absolute !important;
 		width: 1px;
@@ -229,11 +219,10 @@
 		border: 0;
 	}
 
-	/* Overlay: dark tint + backdrop blur over the whole page */
 	.overlay {
 		position: fixed;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.6); /* darker transparent */
+		background: rgba(0, 0, 0, 0.6);
 		backdrop-filter: blur(8px) saturate(120%);
 		-webkit-backdrop-filter: blur(8px) saturate(120%);
 		display: flex;
@@ -241,56 +230,40 @@
 		justify-content: center;
 		z-index: 10000;
 	}
-
-	/* Dropzone: frosted glass card */
 	.dropzone {
 		background: rgba(255, 255, 255, 0.1);
 		background-image: linear-gradient(120deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
 		min-width: 520px;
 		max-width: 90vw;
 		min-height: 240px;
-
 		border: 1px solid rgba(255, 255, 255, 0.35);
 		border-radius: 16px;
 		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-
 		backdrop-filter: blur(18px) saturate(130%);
 		-webkit-backdrop-filter: blur(18px) saturate(130%);
-
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		padding: 1rem;
 		cursor: pointer;
+		color: white;
 	}
-
 	.dropzone.dragging {
 		background: rgba(255, 255, 255, 0.18);
 		border-color: rgba(255, 255, 255, 0.55);
 	}
-
 	.dz-content {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		gap: 0.5rem;
-		color: $text-white; /* readable on dark backdrop */
 		text-align: center;
 	}
-	.dz-content small {
-		color: rgba(245, 245, 245, 0.75);
-	}
-
-	/* Fallback when backdrop-filter is unsupported */
-	@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-		.overlay {
-			background: rgba(0, 0, 0, 0.75);
-		}
-		.dropzone {
-			background: rgba(255, 255, 255, 0.2);
-			box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
-		}
+	.error {
+		color: #b00020;
+		margin-top: 0.5rem;
+		font-weight: bold;
 	}
 </style>
