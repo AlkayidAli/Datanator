@@ -2,6 +2,7 @@
 	import { parseCSVFile } from '$lib/utils/csv/csv';
 	import { csvData, clearCSV } from '$lib/stores/csvData';
 	import { downloadCSVFromParsed } from '$lib/utils/csv/export';
+	import { activeFileId } from '$lib/stores/project';
 
 	import delete_icon from '$lib/common/delete_icon.svg';
 	import CleanPanel from '$lib/components/CleanPanel/CleanPanel.svelte';
@@ -386,11 +387,22 @@
 		if (target?.closest('input,button')) return;
 		handleHeaderClick(h, evt); // uses evt.clientX/Y and stopPropagation internally
 	}
+
+	function backToProjects() {
+		activeFileId.set(null);
+	}
 </script>
 
 <svelte:window onkeydown={onKey} onclick={() => (headerMenu = null)} />
 
 <div class="uploader-container">
+	<div class="util-bar">
+		<button class="secondary" onclick={backToProjects} title="Back to projects">
+			<span class="material-symbols-outlined">arrow_back</span>
+			Projects
+		</button>
+	</div>
+
 	<!-- Utility header -->
 	<div class="util-bar">
 		<input

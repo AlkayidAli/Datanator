@@ -211,6 +211,37 @@
 	}
 
 	onMount(fetchProjects);
+
+	let showDeleteConfirm = $state(false);
+	let deleteConfirmText = $state('');
+
+	async function deleteProject() {
+		if (!$currentProject) return;
+		const name = $currentProject.name;
+		if (deleteConfirmText.trim() !== name) {
+			errorMsg = 'Project name does not match';
+			return;
+		}
+		const res = await fetch(`/api/projects/${$currentProject.project_id}`, {
+			method: 'DELETE',
+			credentials: 'same-origin'
+		});
+		if (!res.ok && res.status !== 204) {
+			errorMsg = 'Failed to delete project';
+			return;
+		}
+		// Remove locally and reset selection
+		projects = projects.filter((p) => p.project_id !== $currentProject!.project_id);
+		currentProject.set(null);
+		projectFiles.set([]);
+		activeFileId.set(null);
+		filesState.set({});
+		selectedProjectId = projects[0]?.project_id ?? null;
+		showDeleteConfirm = false;
+		deleteConfirmText = '';
+		// Optionally auto-select next project
+		if (selectedProjectId) await selectProject(selectedProjectId);
+	}
 </script>
 
 <div class="csv-home">
@@ -224,24 +255,32 @@
 				{:else if projects.length === 0}
 					<div class="empty">
 						<p>No projects yet.</p>
-						<button class="btn primary" on:click={openCreateForm}>Create project</button>
+						<button class="btn primary" onclick={openCreateForm}>Create project</button>
 					</div>
 				{:else}
 					<div class="select-row">
-						<select
-							id="project"
-							disabled={loadingProjects || projects.length === 0}
-							bind:value={selectedProjectId}
-							on:change={(e) => selectProject((e.target as HTMLSelectElement).value)}
-							aria-label="Select project"
-						>
-							{#each projects as p}
-								<option value={p.project_id}>{p.name}</option>
-							{/each}
-						</select>
-						<button class="btn outline" on:click={openCreateForm} title="Create a new project">
-							＋ New
-						</button>
+						<div class="selector-group">
+							<select
+								id="project"
+								class="project-select"
+								disabled={loadingProjects || projects.length === 0}
+								bind:value={selectedProjectId}
+								onchange={(e) => selectProject((e.target as HTMLSelectElement).value)}
+								aria-label="Select project"
+							>
+								{#each projects as p}
+									<option value={p.project_id}>{p.name}</option>
+								{/each}
+							</select>
+							<button
+								class="btn primary grouped"
+								onclick={openCreateForm}
+								title="Create a new project"
+							>
+								<span class="material-symbols-outlined">add</span>
+								<span>New</span>
+							</button>
+						</div>
 					</div>
 					{#if $currentProject}
 						<small class="muted">Selected: {$currentProject.name}</small>
@@ -259,12 +298,12 @@
 					placeholder="Project name"
 					bind:value={newProjectName}
 					maxlength={120}
-					on:keydown={(e) => e.key === 'Enter' && submitCreate()}
+					onkeydown={(e) => e.key === 'Enter' && submitCreate()}
 				/>
-				<button class="btn primary" on:click={submitCreate} disabled={!newProjectName.trim()}>
+				<button class="btn primary" onclick={submitCreate} disabled={!newProjectName.trim()}>
 					Create
 				</button>
-				<button class="btn ghost" on:click={cancelCreate}>Cancel</button>
+				<button class="btn ghost" onclick={cancelCreate}>Cancel</button>
 			</div>
 		{/if}
 
@@ -284,7 +323,7 @@
 					{/if}
 				</p>
 			</div>
-			<button class="btn primary lg" on:click={openOverlay} title="Upload a CSV file">
+			<button class="btn primary lg" onclick={openOverlay} title="Upload a CSV file">
 				<span class="icon" style={`--icon-url: url("${UploadIcon}")`}></span>
 				<span>Upload CSV</span>
 			</button>
@@ -296,7 +335,7 @@
 			accept=".csv,text/csv"
 			aria-label="Upload CSV file"
 			class="visually-hidden"
-			on:change={onFileChange}
+			onchange={onFileChange}
 		/>
 
 		{#if isParsing}<p>Loading file…</p>{/if}
@@ -304,16 +343,61 @@
 	</div>
 </div>
 
+<!-- Under the project select, show a danger action when a project is selected -->
+{#if $currentProject}
+	<div class="danger-area">
+		<button
+			class="btn danger"
+			onclick={() => {
+				showDeleteConfirm = true;
+				deleteConfirmText = '';
+			}}
+		>
+			<span class="material-symbols-outlined">delete</span>
+			Delete project
+		</button>
+		<small class="muted">This will delete all files in this project.</small>
+	</div>
+{/if}
+
+{#if showDeleteConfirm && $currentProject}
+	<div class="danger-box" role="dialog" aria-modal="true" aria-label="Confirm delete project">
+		<p>
+			Type the project name to confirm deletion:
+			<strong>{$currentProject.name}</strong>
+		</p>
+		<input
+			class="input"
+			placeholder="Project name"
+			bind:value={deleteConfirmText}
+			aria-label="Confirm project name"
+		/>
+		<div class="row" style="margin-top:8px;">
+			<button class="btn secondary" onclick={() => (showDeleteConfirm = false)}>Cancel</button>
+			<button
+				class="btn danger"
+				onclick={deleteProject}
+				disabled={deleteConfirmText.trim() !== $currentProject.name}
+			>
+				Confirm delete
+			</button>
+		</div>
+	</div>
+{/if}
+
 <!-- Overlay with dropzone -->
 {#if showDrop}
-	<div class="overlay" on:click={closeOverlay}>
+	<div class="overlay" onclick={closeOverlay}>
 		<div
 			class="dropzone"
 			class:dragging={isDragging}
-			on:click|stopPropagation={openFilePicker}
-			on:dragover={onDragOver}
-			on:dragleave={onDragLeave}
-			on:drop={onDrop}
+			onclick={(e) => {
+				e.stopPropagation();
+				openFilePicker();
+			}}
+			ondragover={onDragOver}
+			ondragleave={onDragLeave}
+			ondrop={onDrop}
 			role="dialog"
 			aria-modal="true"
 			aria-label="Upload CSV by dragging a file here or click to browse"
@@ -321,14 +405,24 @@
 			<div class="dz-content">
 				<strong>Drag & drop</strong> your CSV here
 				<span>or</span>
-				<button class="btn outline" on:click|stopPropagation={openFilePicker}>Browse files</button>
+				<button
+					class="btn outline"
+					onclick={(e) => {
+						e.stopPropagation();
+						openFilePicker();
+					}}
+				>
+					Browse files
+				</button>
 				<small>Only .csv files are supported</small>
 			</div>
 		</div>
 	</div>
 {/if}
 
-<style>
+<style lang="scss">
+	@use '../../../styles/global.scss' as global;
+
 	.csv-home {
 		padding: 1rem;
 		display: flex;
@@ -363,17 +457,85 @@
 		font-weight: 600;
 	}
 
+	/* Selector group (select + New button) */
 	.select-row {
 		display: flex;
-		gap: 8px;
 		align-items: center;
 	}
-	select {
-		padding: 6px 8px;
-		border: 1px solid #ddd;
-		border-radius: 8px;
-		min-width: 260px;
+	.selector-group {
+		display: inline-flex;
+		align-items: stretch;
+		border: 1px solid global.$text-grey-10;
+		border-radius: 10px;
+		overflow: hidden;
 		background: #fff;
+		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+	}
+	.project-select {
+		padding: 0 12px;
+		min-width: 280px;
+		height: 40px;
+		border: none;
+		background: #fff;
+		color: #222;
+	}
+	.project-select:focus-visible {
+		outline: 3px solid global.$background-primary-color;
+		outline-offset: 2px;
+	}
+
+	/* Use your dark primary palette for buttons (match login) */
+	.btn {
+		min-height: 40px;
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		border-radius: 10px;
+		padding: 8px 12px;
+		border: 1px solid global.$text-grey-10;
+		background: #fff;
+		color: #222;
+		cursor: pointer;
+	}
+	.btn:hover {
+		background: global.$background-secondary-color;
+	}
+
+	.btn.primary {
+		background: global.$background-primary-color;
+		color: global.$text-white;
+		border-color: global.$text-grey-10;
+		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+	}
+	.btn.primary:hover {
+		background: global.$background-secondary-color;
+		border-color: global.$background-primary-color;
+		color: global.$text-grey-90;
+		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+	}
+
+	.btn.primary.grouped {
+		border-radius: 0 10px 10px 0;
+		border: none;
+		padding: 0 12px;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		border-left: 1px solid global.$text-grey-10;
+	}
+	.btn.primary.grouped:hover {
+		background: global.$background-secondary-color;
+		color: global.$text-grey-90;
+	}
+
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
 	}
 
 	.create-row {
@@ -384,7 +546,7 @@
 	.input {
 		flex: 1 1 auto;
 		padding: 8px 10px;
-		border: 1px solid #ddd;
+		border: 1px solid global.$text-grey-10;
 		border-radius: 8px;
 	}
 
@@ -397,37 +559,15 @@
 		color: #555;
 	}
 
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		border-radius: 10px;
-		padding: 8px 12px;
-		border: 1px solid #ddd;
-		background: #fff;
-		color: #222;
-		cursor: pointer;
-	}
-	.btn:hover {
-		background: #f8f9ff;
-	}
 	.btn:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
 	}
-	.btn.primary {
-		background: #0b5fff;
-		color: #fff;
-		border-color: #0b5fff;
-		box-shadow: 0 6px 16px rgba(11, 95, 255, 0.2);
-	}
-	.btn.primary:hover {
-		background: #2b72ff;
-	}
+
 	.btn.outline {
 		background: #fff;
-		color: #0b5fff;
-		border-color: #cdd9ff;
+		color: global.$text-grey-90;
+		border-color: global.$text-grey-10;
 	}
 	.btn.ghost {
 		background: transparent;
@@ -514,5 +654,58 @@
 		justify-content: center;
 		gap: 0.5rem;
 		text-align: center;
+	}
+
+	.danger-area {
+		padding: 0 1em;
+		margin-top: 8px;
+		display: flex;
+		gap: 10px;
+		align-items: center;
+	}
+	.btn.danger {
+		border-color: #f3c7c7;
+		color: #a11;
+		background: #fff;
+	}
+	.btn.danger:hover {
+		background: #fff7f7;
+	}
+	.danger-box {
+		margin-top: 8px;
+		padding: 10px;
+		border: 1px solid #f0d3d3;
+		border-radius: 10px;
+		background: #fff7f7;
+	}
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
+	}
+
+	@media (max-width: 560px) {
+		.selector-group {
+			flex-direction: column;
+			align-items: stretch;
+			border-radius: 10px;
+		}
+		.project-select {
+			min-width: 0;
+			width: 100%;
+			border-bottom: 1px solid global.$text-grey-10;
+			border-right: none;
+			height: 42px;
+		}
+		.btn.primary.grouped {
+			width: 100%;
+			border-left: none;
+			border-top: none;
+			border-radius: 0 0 10px 10px;
+		}
 	}
 </style>
