@@ -9,7 +9,7 @@
 	// Local rune-based state
 	let isParsing = $state(false);
 	let parseError: string | null = $state(null);
-	let showAdvanced = $state(false);
+
 	let editMode = $state(false);
 	let newColName = $state('');
 	let search = $state(''); // search query for filtering
@@ -428,17 +428,6 @@
 		<div class="no-results">
 			<span class="material-symbols-outlined">search_off</span>
 			No results for “{search}”
-		</div>
-	{/if}
-
-	<button type="button" onclick={() => (showAdvanced = !showAdvanced)}>
-		{#if showAdvanced}Hide Advanced Options{/if}
-		{#if !showAdvanced}Show Advanced Options{/if}
-	</button>
-
-	{#if showAdvanced}
-		<div style="margin-top:0.5rem;">
-			<em>Advanced options placeholder (e.g. choose delimiter, header usage toggle, encoding).</em>
 		</div>
 	{/if}
 

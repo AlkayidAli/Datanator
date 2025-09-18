@@ -74,8 +74,9 @@
 </script>
 
 <div class="project-bar">
-	<label>Project:</label>
+	<label for="project-select">Project:</label>
 	<select
+		id="project-select"
 		disabled={loading || projects.length === 0}
 		on:change={(e) => selectProject((e.target as HTMLSelectElement).value)}
 	>

@@ -1,5 +1,4 @@
 <script lang="ts">
-	import ProjectBar from '$lib/components/projects/ProjectBar.svelte';
 	import FileTabs from '$lib/components/projects/FileTabs.svelte';
 	import CsvUploader from '$lib/components/csvParser/CsvParser.svelte';
 	import CsvHome from '$lib/components/CsvHome/CsvHome.svelte';
@@ -10,7 +9,7 @@
 	import { onDestroy } from 'svelte';
 	import { get } from 'svelte/store';
 
-	// Keep csvData in sync when the underlying file state changes
+	// Keep csvData in sync with active file state
 	const unsub = filesState.subscribe((map) => {
 		const id = get(activeFileId);
 		if (!id) return;
@@ -44,21 +43,20 @@
 </script>
 
 <div class="page">
-	<ProjectBar />
-	{#if $currentProject}
+	{#if $currentProject && $projectFiles.length > 0}
 		<FileTabs />
 	{/if}
 
 	{#if $activeFileId}
 		<CsvUploader />
 	{:else}
-		<!-- Reuse your existing upload UI; hide its internal ProjectBar to avoid duplication -->
-		<CsvHome showProjectBar={false} />
+		<!-- Combined project selector + upload UI -->
+		<CsvHome />
 	{/if}
 </div>
 
 <style>
 	.page {
-		padding: 8px;
+		padding: 12px;
 	}
 </style>
