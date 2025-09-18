@@ -1,13 +1,62 @@
 <script lang="ts">
+	import FileTabs from '$lib/components/projects/FileTabs.svelte';
 	import CsvUploader from '$lib/components/csvParser/CsvParser.svelte';
 	import CsvHome from '$lib/components/CsvHome/CsvHome.svelte';
+
 	import { csvData } from '$lib/stores/csvData';
+	import { activeFileId, projectFiles, currentProject } from '$lib/stores/project';
+	import { filesState } from '$lib/stores/csvMulti';
+	import { onDestroy } from 'svelte';
+	import { get } from 'svelte/store';
+
+	// Keep csvData in sync with active file state
+	const unsub = filesState.subscribe((map) => {
+		const id = get(activeFileId);
+		if (!id) return;
+		const next = map[id];
+		if (!next) return;
+		const cur = get(csvData);
+		if (cur !== next) csvData.set(next);
+	});
+	const unsub2 = csvData.subscribe((val) => {
+		const id = get(activeFileId);
+		if (!id || !val) return;
+		filesState.update((m) => {
+			const cur = m[id];
+			if (cur === val) return m;
+			return { ...m, [id]: val };
+		});
+	});
+
+	// Also switch the editor immediately when the active tab changes
+	$: if ($activeFileId) {
+		const next = $filesState[$activeFileId];
+		if (next && get(csvData) !== next) {
+			csvData.set(next);
+		}
+	}
+
+	onDestroy(() => {
+		unsub();
+		unsub2();
+	});
 </script>
 
-{#if !$csvData}
-	<CsvHome />
-{/if}
+<div class="page">
+	{#if $currentProject && $projectFiles.length > 0}
+		<FileTabs />
+	{/if}
 
-{#if $csvData}
-	<CsvUploader />
-{/if}
+	{#if $activeFileId}
+		<CsvUploader />
+	{:else}
+		<!-- Combined project selector + upload UI -->
+		<CsvHome />
+	{/if}
+</div>
+
+<style>
+	.page {
+		padding: 12px;
+	}
+</style>

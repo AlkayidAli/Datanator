@@ -2,15 +2,21 @@
 	import { parseCSVFile } from '$lib/utils/csv/csv';
 	import { csvData, clearCSV } from '$lib/stores/csvData';
 	import { downloadCSVFromParsed } from '$lib/utils/csv/export';
+	import { activeFileId } from '$lib/stores/project';
 
 	import delete_icon from '$lib/common/delete_icon.svg';
+	import CleanPanel from '$lib/components/CleanPanel/CleanPanel.svelte';
+	import CleanMenu from '$lib/components/CleanPanel/CleanMenu.svelte';
 	// Local rune-based state
 	let isParsing = $state(false);
 	let parseError: string | null = $state(null);
-	let showAdvanced = $state(false);
+
 	let editMode = $state(false);
 	let newColName = $state('');
 	let search = $state(''); // search query for filtering
+	let showClean = $state(false);
+	let showCleanMenu = $state(false);
+	let cleanMode = $state<'duplicates' | 'empty' | 'date' | null>(null);
 
 	let pageSize = $state(25);
 	let currentPage = $state(1);
@@ -25,6 +31,14 @@
 
 	// Row selection (track absolute row indices)
 	let selectedRows = $state(new Set<number>());
+
+	// Rows highlighted by cleaning tools
+	let highlightedRows = $state(new Set<number>());
+	// Individual cells highlighted by cleaning tools (rowIndex::header)
+	let highlightedCells = $state(new Set<string>());
+	function cellKey(absRow: number, header: string) {
+		return `${absRow}::${header}`;
+	}
 
 	// Derived: indices of rows that match search (map to original row indices)
 	const filteredIndex = $derived(() => {
@@ -373,11 +387,22 @@
 		if (target?.closest('input,button')) return;
 		handleHeaderClick(h, evt); // uses evt.clientX/Y and stopPropagation internally
 	}
+
+	function backToProjects() {
+		activeFileId.set(null);
+	}
 </script>
 
 <svelte:window onkeydown={onKey} onclick={() => (headerMenu = null)} />
 
 <div class="uploader-container">
+	<div class="util-bar">
+		<button class="secondary" onclick={backToProjects} title="Back to projects">
+			<span class="material-symbols-outlined">arrow_back</span>
+			Projects
+		</button>
+	</div>
+
 	<!-- Utility header -->
 	<div class="util-bar">
 		<input
@@ -403,7 +428,7 @@
 				<span class="material-symbols-outlined">file_download</span>
 				Export
 			</button>
-			<button onclick={clean} title="Clean (coming soon)">
+			<button onclick={() => (showCleanMenu = true)} title="Data cleaning">
 				<span class="material-symbols-outlined">cleaning_services</span>
 				Clean
 			</button>
@@ -415,17 +440,6 @@
 		<div class="no-results">
 			<span class="material-symbols-outlined">search_off</span>
 			No results for “{search}”
-		</div>
-	{/if}
-
-	<button type="button" onclick={() => (showAdvanced = !showAdvanced)}>
-		{#if showAdvanced}Hide Advanced Options{/if}
-		{#if !showAdvanced}Show Advanced Options{/if}
-	</button>
-
-	{#if showAdvanced}
-		<div style="margin-top:0.5rem;">
-			<em>Advanced options placeholder (e.g. choose delimiter, header usage toggle, encoding).</em>
 		</div>
 	{/if}
 
@@ -560,7 +574,7 @@
 				</thead>
 				<tbody>
 					{#each paginatedRows() as row, i}
-						<tr>
+						<tr class:highlight={highlightedRows.has(filteredIndex()[startIndex() + i])}>
 							{#if editMode}
 								<td class="select-col">
 									<input
@@ -577,6 +591,9 @@
 									class:selected={selectedCell &&
 										selectedCell.rowLocal === i &&
 										selectedCell.header === h}
+									class:cell-highlight={highlightedCells.has(
+										cellKey(filteredIndex()[startIndex() + i], h)
+									)}
 									onclick={() => handleCellClick(i, h)}
 								>
 									{#if editingCell && editingCell.rowLocal === i && editingCell.header === h}
@@ -650,6 +667,39 @@
 				Delete column
 			</button>
 		</div>
+	{/if}
+
+	{#if showCleanMenu}
+		<CleanMenu
+			onClose={() => (showCleanMenu = false)}
+			onSelect={(m) => {
+				cleanMode = m;
+				showCleanMenu = false;
+				showClean = true;
+			}}
+		/>
+	{/if}
+
+	{#if showClean && cleanMode}
+		<CleanPanel
+			mode={cleanMode}
+			onHighlightRows={(ids: number[]) => {
+				highlightedRows = new Set(ids);
+				editMode = true;
+			}}
+			onHighlightEmptyCells={(cells) => {
+				highlightedCells = new Set(cells.map((c) => cellKey(c.row, c.col)));
+				editMode = true;
+			}}
+			onBack={() => {
+				showClean = false;
+				showCleanMenu = true;
+			}}
+			onClose={() => {
+				showClean = false;
+				cleanMode = null;
+			}}
+		/>
 	{/if}
 </div>
 
@@ -936,5 +986,12 @@
 
 	.file-info {
 		padding-top: 0.5rem;
+	}
+
+	tr.highlight td {
+		background: #fff7cc; /* soft yellow */
+	}
+	td.cell-highlight {
+		background: #ffeaea; /* soft red tint for empty cells */
 	}
 </style>

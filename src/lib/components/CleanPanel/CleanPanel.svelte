@@ -1,0 +1,999 @@
+<script lang="ts">
+	import { csvData } from '$lib/stores/csvData';
+
+	type CleanMode = 'duplicates' | 'empty' | 'date';
+
+	// Typed props (add onHighlightRows)
+	const props = $props<{
+		mode: CleanMode;
+		onClose: () => void;
+		onBack?: () => void;
+		onHighlightRows?: (ids: number[]) => void;
+		onHighlightEmptyCells?: (cells: { row: number; col: string }[]) => void;
+	}>();
+
+	function close() {
+		props.onClose();
+	}
+	function back() {
+		(props.onBack ?? props.onClose)();
+	}
+
+	const titles: Record<CleanMode, string> = {
+		duplicates: 'Duplicate finder',
+		empty: 'Empty cells',
+		date: 'Date formatter'
+	};
+
+	// Narrow mode for indexing to avoid TS7053
+	const panelTitle = $derived(() => titles[props.mode as CleanMode]);
+
+	// State variables
+	let useAllDup = $state(true);
+	let dupCols = $state<string[]>([]);
+	let dupCaseSensitive = $state(false);
+	let dupCount = $state<number | null>(null);
+
+	let useAllEmpty = $state(true);
+	let emptyCols = $state<string[]>([]);
+	let emptyCount = $state<number | null>(null);
+	let fillValue = $state<string>('');
+	// confirm dialog for deleting rows with empty cells
+	let showEmptyDeleteConfirm = $state(false);
+
+	// Date formatter state
+	let useAllDate = $state(true);
+	let dateCols = $state<string[]>([]);
+	let outFormat = $state<'YYYY-MM-DD' | 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'ISO_DATETIME'>('YYYY-MM-DD');
+	let target = $state<'add' | 'replace'>('add');
+	let newColName = $state<string>('');
+
+	// Derived from store
+	const headers = $derived(() => $csvData?.headers ?? []);
+	const rowCount = $derived(() => $csvData?.rows.length ?? 0);
+
+	// Fast date eligibility (no full scan)
+	const DATE_SAMPLE_ROWS = 400;
+	const DATE_MIN_TESTS = 12;
+	const DATE_MIN_PASSES = 6;
+	const DATE_MIN_PASS_RATIO = 0.6;
+
+	function looksDateish(s: string) {
+		// cheap precheck to avoid Date.parse on random strings
+		return /[0-9]/.test(s) && (/[\/\-\.:]/.test(s) || /[TtZz]/.test(s) || /[A-Za-z]{3,}/.test(s));
+	}
+	function isParsableDateFast(v: unknown): boolean {
+		if (v == null || v === '') return false;
+		if (v instanceof Date) return !isNaN(v.getTime());
+		const s = String(v).trim();
+		if (!looksDateish(s)) return false;
+		return !isNaN(Date.parse(s));
+	}
+
+	let dateEligible = $state<string[]>([]);
+
+	function recomputeDateEligible() {
+		if (!$csvData) {
+			dateEligible = [];
+			return;
+		}
+		const hdrs = $csvData.headers;
+		const n = $csvData.rows.length;
+		const eligible: string[] = [];
+
+		outer: for (const h of hdrs) {
+			let tested = 0,
+				passes = 0;
+			for (let i = 0; i < n && tested < DATE_SAMPLE_ROWS; i++) {
+				const v = $csvData.rows[i][h];
+				if (v == null || v === '') continue;
+				tested++;
+				if (isParsableDateFast(v)) passes++;
+
+				// early reject if it's mathematically impossible to hit thresholds
+				if (tested >= DATE_MIN_TESTS) {
+					const remaining = DATE_SAMPLE_ROWS - tested;
+					const maxPossiblePasses = passes + remaining;
+					if (maxPossiblePasses < DATE_MIN_PASSES) continue outer;
+					if (
+						passes / tested < DATE_MIN_PASS_RATIO &&
+						tested - passes > DATE_MIN_TESTS * (1 - DATE_MIN_PASS_RATIO)
+					) {
+						continue outer;
+					}
+				}
+			}
+			if (
+				passes >= DATE_MIN_PASSES ||
+				(tested >= DATE_MIN_TESTS && passes / tested >= DATE_MIN_PASS_RATIO)
+			) {
+				eligible.push(h);
+			}
+		}
+		dateEligible = eligible;
+		// keep user selections valid
+		if (!useAllDate) dateCols = dateCols.filter((c) => eligible.includes(c));
+	}
+
+	// trigger compute when opening the Date tool or data changes
+	$effect(() => {
+		// touching these makes the effect aware of changes
+		props.mode;
+		$csvData?.headers;
+		$csvData?.rows.length;
+		if (props.mode === 'date') queueMicrotask(recomputeDateEligible);
+	});
+
+	const dateHeadersView = $derived(() => (dateEligible.length ? dateEligible : headers()));
+
+	// Helpers
+	function asKey(val: unknown, caseSensitive: boolean) {
+		const s = val == null ? '' : String(val);
+		return caseSensitive ? s : s.toLowerCase();
+	}
+	function insertColumnAfter(name: string, newName: string) {
+		csvData.update((d) => {
+			if (!d) return d;
+			if (d.headers.includes(newName)) return d;
+			const idx = d.headers.indexOf(name);
+			if (idx === -1) return d;
+			const headers = d.headers.slice();
+			headers.splice(idx + 1, 0, newName);
+			const rows = d.rows.map((r) => ({ ...r, [newName]: null }));
+			return { ...d, headers, rows };
+		});
+	}
+
+	// Duplicates
+	// Build duplicate clusters (OR semantics)
+	function buildDuplicateClusters(): number[][] {
+		if (!$csvData) return [];
+		const cols = useAllDup ? $csvData.headers : dupCols;
+		if (cols.length === 0) return [];
+
+		const n = $csvData.rows.length;
+		const parent = Array.from({ length: n }, (_, i) => i);
+		function find(a: number): number {
+			while (parent[a] !== a) {
+				parent[a] = parent[parent[a]];
+				a = parent[a];
+			}
+			return a;
+		}
+		function union(a: number, b: number) {
+			const ra = find(a);
+			const rb = find(b);
+			if (ra !== rb) parent[rb] = ra;
+		}
+
+		// For each column, union rows that share the same value (case sensitivity respected)
+		for (const c of cols) {
+			const map = new Map<string, number[]>();
+			for (let i = 0; i < n; i++) {
+				const key = asKey($csvData.rows[i][c], dupCaseSensitive);
+				const arr = map.get(key);
+				if (arr) arr.push(i);
+				else map.set(key, [i]);
+			}
+			for (const group of map.values()) {
+				if (group.length > 1) {
+					const first = group[0];
+					for (let k = 1; k < group.length; k++) union(first, group[k]);
+				}
+			}
+		}
+
+		// Collect connected components with size > 1
+		const comps = new Map<number, number[]>();
+		for (let i = 0; i < n; i++) {
+			const r = find(i);
+			const arr = comps.get(r);
+			if (arr) arr.push(i);
+			else comps.set(r, [i]);
+		}
+		const clusters: number[][] = [];
+		for (const arr of comps.values()) {
+			if (arr.length > 1) {
+				arr.sort((a, b) => a - b);
+				clusters.push(arr);
+			}
+		}
+		return clusters;
+	}
+
+	// Recompute count using clusters (rows that would be removed if keeping first in each cluster)
+	function computeDuplicateCount(): number {
+		if (!$csvData) return 0;
+		const clusters = buildDuplicateClusters();
+		return clusters.reduce((acc, g) => acc + (g.length - 1), 0);
+	}
+
+	// Expose a simple "Find" action used by the button
+	function findDuplicates() {
+		dupCount = computeDuplicateCount();
+	}
+
+	// UI state for duplicate choices
+	let showDupChoices = $state(false);
+
+	function onRemoveDuplicatesClick() {
+		// Open choice UI only if there are duplicates
+		dupCount = computeDuplicateCount();
+		showDupChoices = dupCount != null && dupCount > 0;
+	}
+
+	// Helper: choose first non-empty value
+	function firstNonEmpty(values: unknown[]) {
+		for (const v of values) {
+			if (v !== null && v !== '') return v;
+		}
+		return values.length ? values[0] : null;
+	}
+
+	// Merge rows within each duplicate cluster
+	function mergeDuplicateClusters() {
+		if (!$csvData) return;
+		const clusters = buildDuplicateClusters();
+		if (clusters.length === 0) return;
+
+		csvData.update((d) => {
+			if (!d) return d;
+			const toRemove = new Set<number>();
+			const rows = d.rows.slice();
+
+			for (const cluster of clusters) {
+				const keep = cluster[0]; // smallest index
+				for (const h of d.headers) {
+					const vals = cluster.map((idx) => rows[idx]?.[h]);
+					const chosen = firstNonEmpty(vals);
+					// Write chosen value to 'keep'
+					const base = rows[keep] ?? {};
+					base[h] = chosen as any;
+					rows[keep] = base as any;
+				}
+				// Mark all others for removal
+				for (let i = 1; i < cluster.length; i++) toRemove.add(cluster[i]);
+			}
+
+			const newRows = rows.filter((_, idx) => !toRemove.has(idx));
+			return { ...d, rows: newRows };
+		});
+		dupCount = computeDuplicateCount();
+		showDupChoices = false;
+	}
+
+	// Remove duplicates keeping first per cluster
+	function reallyRemoveDuplicatesKeepFirst() {
+		if (!$csvData) return;
+		const clusters = buildDuplicateClusters();
+		if (clusters.length === 0) return;
+
+		csvData.update((d) => {
+			if (!d) return d;
+			const toRemove = new Set<number>();
+			for (const cluster of clusters) {
+				for (let i = 1; i < cluster.length; i++) toRemove.add(cluster[i]);
+			}
+			const rows = d.rows.filter((_, idx) => !toRemove.has(idx));
+			return { ...d, rows };
+		});
+		dupCount = computeDuplicateCount();
+		showDupChoices = false;
+	}
+
+	// Highlight duplicate rows and switch to edit mode in parent
+	function highlightDuplicates() {
+		const clusters = buildDuplicateClusters();
+		const indices = clusters.flat();
+		props.onHighlightRows?.(indices);
+		showDupChoices = false;
+		close();
+	}
+
+	// Empty cells
+	function isEmpty(v: unknown) {
+		return v == null || v === '';
+	}
+	// Build the list of empty cells for current selection
+	function computeEmptyCells(): { row: number; col: string }[] {
+		if (!$csvData) return [];
+		const cols = useAllEmpty ? $csvData.headers : emptyCols;
+		if (cols.length === 0) return [];
+		const result: { row: number; col: string }[] = [];
+		for (let i = 0; i < $csvData.rows.length; i++) {
+			const r = $csvData.rows[i];
+			for (const h of cols) {
+				if (isEmpty(r[h])) result.push({ row: i, col: h });
+			}
+		}
+		return result;
+	}
+
+	function computeEmptyCount(): number {
+		if (!$csvData) return 0;
+		const cols = useAllEmpty ? $csvData.headers : emptyCols;
+		if (cols.length === 0) return 0;
+		let count = 0;
+		for (const row of $csvData.rows) for (const h of cols) if (isEmpty(row[h])) count++;
+		return count;
+	}
+	function findEmpties() {
+		emptyCount = computeEmptyCount();
+	}
+
+	// Highlight empty cells and put table in edit mode (handled by parent)
+	function highlightEmptyCells() {
+		const cells = computeEmptyCells();
+		if (cells.length === 0) {
+			emptyCount = 0;
+			return;
+		}
+		props.onHighlightEmptyCells?.(cells);
+		close();
+	}
+
+	// Delete rows that contain empties (confirm UI below)
+	function removeRowsWithEmpties() {
+		if (!$csvData) return;
+		const cols = useAllEmpty ? $csvData.headers : emptyCols;
+		if (cols.length === 0) return;
+		csvData.update((d) => {
+			if (!d) return d;
+			const rows = d.rows.filter((r) => !cols.some((h) => isEmpty(r[h])));
+			return { ...d, rows };
+		});
+		emptyCount = computeEmptyCount();
+		showEmptyDeleteConfirm = false; // close confirmation after applying
+	}
+	// Mass fill empties
+	let replaceMode = $state<'null' | 'value'>('value');
+	function fillEmptyCells() {
+		if (!$csvData) return;
+		const cols = useAllEmpty ? $csvData.headers : emptyCols;
+		if (cols.length === 0) return;
+		// Use the literal string "null" when selected
+		const replacement = replaceMode === 'null' ? 'null' : String(fillValue);
+		if (replaceMode === 'value' && !String(fillValue).trim()) return;
+		csvData.update((d) => {
+			if (!d) return d;
+			const rows = d.rows.map((r) => {
+				const copy = { ...r };
+				for (const h of cols) if (isEmpty(copy[h])) copy[h] = replacement as any;
+				return copy;
+			});
+			return { ...d, rows };
+		});
+		emptyCount = computeEmptyCount();
+	}
+
+	// Date formatter
+	function pad2(n: number) {
+		return n < 10 ? `0${n}` : String(n);
+	}
+	function formatDate(val: unknown): string | null {
+		if (val == null || val === '') return null;
+		let d: Date;
+		if (val instanceof Date) d = val;
+		else {
+			const t = new Date(String(val));
+			if (isNaN(t.getTime())) return null;
+			d = t;
+		}
+		const Y = d.getFullYear(),
+			M = pad2(d.getMonth() + 1),
+			D = pad2(d.getDate());
+		const h = pad2(d.getHours()),
+			m = pad2(d.getMinutes()),
+			s = pad2(d.getSeconds());
+		switch (outFormat) {
+			case 'YYYY-MM-DD':
+				return `${Y}-${M}-${D}`;
+			case 'DD/MM/YYYY':
+				return `${D}/${M}/${Y}`;
+			case 'MM/DD/YYYY':
+				return `${M}/${D}/${Y}`;
+			case 'ISO_DATETIME':
+				return `${Y}-${M}-${D}T${h}:${m}:${s}`;
+		}
+	}
+	function applyDateFormat() {
+		if (!$csvData) return;
+		// Use only eligible headers for performance and accuracy
+		const pool = dateEligible.length ? dateEligible : $csvData.headers;
+		const cols = useAllDate ? pool : dateCols;
+		if (cols.length === 0) return;
+
+		// Prepare new columns if adding
+		if (target === 'add') {
+			for (const col of cols) {
+				const name =
+					cols.length === 1 && !useAllDate && newColName.trim()
+						? newColName.trim()
+						: `${col}_formatted`;
+				if (!$csvData.headers.includes(name)) {
+					insertColumnAfter(col, name);
+				}
+			}
+		}
+
+		// Map of original -> destination (when adding)
+		const destName: Record<string, string> = {};
+		if (target === 'add') {
+			for (const col of cols) {
+				destName[col] =
+					cols.length === 1 && !useAllDate && newColName.trim()
+						? newColName.trim()
+						: `${col}_formatted`;
+			}
+		}
+
+		csvData.update((d) => {
+			if (!d) return d;
+			const rows = d.rows.map((r) => {
+				let copy = r;
+				for (const col of cols) {
+					const formatted = formatDate(r[col]);
+					if (formatted == null) continue;
+					if (target === 'replace') {
+						if (copy === r) copy = { ...r };
+						copy[col] = formatted as any;
+					} else {
+						const name = destName[col];
+						if (copy === r) copy = { ...r };
+						copy[name] = formatted as any;
+					}
+				}
+				return copy;
+			});
+			return { ...d, rows };
+		});
+	}
+
+	// Checkbox toggles
+	function toggleDupCol(h: string) {
+		dupCols = dupCols.includes(h) ? dupCols.filter((x) => x !== h) : [...dupCols, h];
+	}
+	function toggleEmptyCol(h: string) {
+		emptyCols = emptyCols.includes(h) ? emptyCols.filter((x) => x !== h) : [...emptyCols, h];
+	}
+	function toggleDateCol(h: string) {
+		dateCols = dateCols.includes(h) ? dateCols.filter((x) => x !== h) : [...dateCols, h];
+	}
+
+	// a11y: keyboard close for overlay
+	function overlayKey(e: KeyboardEvent) {
+		if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') close();
+	}
+	// a11y: prevent overlay keydown from closing when inside dialog
+	function panelKey(e: KeyboardEvent) {
+		if (e.key === 'Escape') e.stopPropagation();
+	}
+</script>
+
+<div
+	class="clean-overlay"
+	role="button"
+	tabindex="0"
+	aria-label="Close cleaning panel"
+	onclick={close}
+	onkeydown={overlayKey}
+>
+	<!-- svelte-ignore a11y_interactive_supports_focus -->
+	<div
+		class="clean-panel"
+		role="dialog"
+		aria-modal="true"
+		aria-label={panelTitle()}
+		onclick={(e) => e.stopPropagation()}
+		onkeydown={panelKey}
+	>
+		<header class="panel-head">
+			<button class="back-btn" onclick={back} title="Back">←</button>
+			<button class="close-btn" onclick={close} title="Close">✕</button>
+			<h3>{panelTitle()}</h3>
+		</header>
+
+		{#if props.mode === 'duplicates'}
+			<section>
+				<h4>Duplicates</h4>
+				<div class="row">
+					<label
+						><input type="checkbox" checked={useAllDup} onclick={() => (useAllDup = !useAllDup)} /> Use
+						all columns</label
+					>
+				</div>
+				<div class="col-list" aria-label="Columns to check for duplicates">
+					{#each headers() as h}
+						<label class="col-item">
+							<input
+								type="checkbox"
+								checked={dupCols.includes(h)}
+								disabled={useAllDup}
+								onclick={() => toggleDupCol(h)}
+							/>
+							<span class="col-name">{h}</span>
+						</label>
+					{/each}
+				</div>
+				<div class="row">
+					<label
+						><input
+							type="checkbox"
+							checked={dupCaseSensitive}
+							onclick={() => (dupCaseSensitive = !dupCaseSensitive)}
+						/> Case sensitive</label
+					>
+				</div>
+				<div class="actions">
+					<button class="secondary" onclick={findDuplicates}>Find</button>
+					<button onclick={onRemoveDuplicatesClick} title="Choose how to handle duplicates">
+						Handle duplicates
+					</button>
+					{#if dupCount !== null}
+						<span class="meta">{dupCount} duplicate{dupCount === 1 ? '' : 's'} found</span>
+					{/if}
+				</div>
+
+				{#if showDupChoices}
+					<div class="dup-choices" role="group" aria-label="Duplicate handling options">
+						<button
+							onclick={mergeDuplicateClusters}
+							title="Keep one row and merge values from duplicates"
+						>
+							Merge rows (keep first)
+						</button>
+						<button
+							class="danger"
+							onclick={reallyRemoveDuplicatesKeepFirst}
+							title="Drop duplicates and keep the first"
+						>
+							Remove duplicates
+						</button>
+						<button
+							onclick={highlightDuplicates}
+							title="Highlight duplicates in the table for manual review"
+						>
+							Highlight and edit
+						</button>
+					</div>
+				{/if}
+			</section>
+		{/if}
+
+		{#if props.mode === 'empty'}
+			<section>
+				<h4>Empty cells</h4>
+				<div class="row">
+					<label
+						><input
+							type="checkbox"
+							checked={useAllEmpty}
+							onclick={() => (useAllEmpty = !useAllEmpty)}
+						/> Use all columns</label
+					>
+				</div>
+
+				<div class="col-list" aria-label="Columns to check for empty cells">
+					{#each headers() as h}
+						<label class="col-item">
+							<input
+								type="checkbox"
+								checked={emptyCols.includes(h)}
+								disabled={useAllEmpty}
+								onclick={() => toggleEmptyCol(h)}
+							/>
+							<span class="col-name">{h}</span>
+						</label>
+					{/each}
+				</div>
+
+				<div class="actions">
+					<button class="secondary" onclick={findEmpties}>Find</button>
+					<button
+						onclick={highlightEmptyCells}
+						title="Highlight empty cells in the table and enable edit mode"
+					>
+						Highlight and edit
+					</button>
+				</div>
+
+				<!-- Mass replace -->
+				<div class="replace-box" role="group" aria-label="Fill empty cells">
+					<strong>Fill empties</strong>
+					<label>
+						<input
+							type="radio"
+							name="replaceMode"
+							value="null"
+							checked={replaceMode === 'null'}
+							onclick={() => (replaceMode = 'null')}
+						/>
+						Use "null" (text)
+					</label>
+					<label class="fill">
+						<input
+							type="radio"
+							name="replaceMode"
+							value="value"
+							checked={replaceMode === 'value'}
+							onclick={() => (replaceMode = 'value')}
+						/>
+						<span>Custom value</span>
+						<input
+							class="fill-input"
+							placeholder="e.g. N/A"
+							bind:value={fillValue}
+							disabled={replaceMode === 'null'}
+						/>
+					</label>
+					<button onclick={fillEmptyCells} disabled={replaceMode === 'value' && !fillValue.trim()}
+						>Apply fill</button
+					>
+				</div>
+
+				<!-- Dangerous: delete rows containing empties -->
+				<div class="danger-box">
+					<button
+						class="danger"
+						onclick={() => (showEmptyDeleteConfirm = true)}
+						title="Delete rows that contain empty cells"
+					>
+						Delete rows with empty cells
+					</button>
+					{#if showEmptyDeleteConfirm}
+						<div class="confirm">
+							<p>
+								Are you sure? This will permanently remove all rows that contain empty cells in the
+								selected columns.
+							</p>
+							<div class="actions">
+								<button class="secondary" onclick={() => (showEmptyDeleteConfirm = false)}
+									>Cancel</button
+								>
+								<button class="danger" onclick={removeRowsWithEmpties}>Confirm delete</button>
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				{#if emptyCount !== null}
+					<span class="meta">{emptyCount} empty cell{emptyCount === 1 ? '' : 's'} found</span>
+				{/if}
+			</section>
+		{/if}
+
+		{#if props.mode === 'date'}
+			<section>
+				<h4>Date formatter</h4>
+				<div class="row">
+					<label>
+						<input
+							type="checkbox"
+							checked={useAllDate}
+							onclick={() => (useAllDate = !useAllDate)}
+						/>
+						Use all columns
+					</label>
+				</div>
+				<div class="col-list" aria-label="Columns to format as dates">
+					{#each dateHeadersView() as h}
+						<label class="col-item">
+							<input
+								type="checkbox"
+								checked={dateCols.includes(h)}
+								disabled={useAllDate}
+								onclick={() => toggleDateCol(h)}
+							/>
+							<span class="col-name">{h}</span>
+						</label>
+					{/each}
+				</div>
+
+				<div class="row">
+					<label for="fmt">Format</label>
+					<div class="select-wrap">
+						<select
+							id="fmt"
+							class="select"
+							bind:value={outFormat}
+							aria-label="Date format"
+							disabled={target === 'replace'}
+							title={target === 'replace' ? 'Disabled when replacing original column' : undefined}
+						>
+							<option value="YYYY-MM-DD">YYYY-MM-DD</option>
+							<option value="DD/MM/YYYY">DD/MM/YYYY</option>
+							<option value="MM/DD/YYYY">MM/DD/YYYY</option>
+							<option value="ISO_DATETIME">ISO date-time</option>
+						</select>
+						<span class="select-icon material-symbols-outlined" aria-hidden="true">expand_more</span
+						>
+					</div>
+				</div>
+				<div class="row">
+					<label
+						><input
+							type="radio"
+							name="target"
+							value="add"
+							checked={target === 'add'}
+							onclick={() => (target = 'add')}
+						/> Add as new column</label
+					>
+					<label
+						><input
+							type="radio"
+							name="target"
+							value="replace"
+							checked={target === 'replace'}
+							onclick={() => (target = 'replace')}
+						/> Replace original</label
+					>
+				</div>
+				{#if target === 'add' && !useAllDate && dateCols.length === 1}
+					<div class="row">
+						<label for="new-name">New column name</label>
+						<input
+							id="new-name"
+							placeholder="Defaults to <col>_formatted"
+							bind:value={newColName}
+						/>
+					</div>
+				{/if}
+				<div class="actions">
+					<button
+						onclick={applyDateFormat}
+						disabled={useAllDate ? headers().length === 0 : dateCols.length === 0}
+					>
+						Apply
+					</button>
+				</div>
+				<p class="hint">
+					Note: parsing uses the browser Date parser; only valid dates will be formatted.
+				</p>
+			</section>
+		{/if}
+
+		<footer class="panel-foot">
+			<span class="meta">{rowCount()} rows</span>
+			<div class="grow"></div>
+			<button class="secondary" onclick={close}>Close</button>
+		</footer>
+	</div>
+</div>
+
+<style>
+	.clean-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.45);
+		backdrop-filter: blur(4px);
+		-webkit-backdrop-filter: blur(4px);
+		display: flex;
+		align-items: stretch;
+		justify-content: flex-end;
+		z-index: 10000;
+	}
+	.clean-panel {
+		width: min(460px, 100vw);
+		height: 100%;
+		background: #fff;
+		border-left: 1px solid #e5e5e5;
+		box-shadow: -12px 0 24px rgba(0, 0, 0, 0.15);
+		padding: 14px 14px 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		overflow-y: auto; /* allow scrolling inside the panel */
+		-webkit-overflow-scrolling: touch;
+	}
+	.panel-head,
+	.panel-foot {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.panel-head h3 {
+		margin: 0;
+		font-size: 1.1rem;
+	}
+	.close-btn,
+	.back-btn {
+		border: 1px solid #ddd;
+		background: #f8f8f8;
+		padding: 0.35rem 0.6rem;
+		border-radius: 6px;
+		width: 32px;
+		height: 32px;
+	}
+
+	section {
+		border: 1px solid #eee;
+		border-radius: 10px;
+		padding: 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	section h4 {
+		margin: 0 0 2px 0;
+		font-size: 1rem;
+	}
+	.row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+	}
+	.fill {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		margin-left: auto;
+	}
+	.fill-input {
+		padding: 0.4rem 0.6rem;
+		border: 1px solid #ddd;
+		border-radius: 6px;
+	}
+	.meta {
+		color: #666;
+		font-size: 0.9rem;
+	}
+	.hint {
+		color: #777;
+		font-size: 0.85rem;
+		margin: 0;
+	}
+	.grow {
+		flex: 1 1 auto;
+	}
+	button {
+		cursor: pointer;
+	}
+	button.danger {
+		color: #a11;
+	}
+
+	/* Column checkbox list */
+	.col-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 8px;
+		border: 1px solid #e1e1e1;
+		border-radius: 10px;
+		background: #fff;
+		max-height: 220px;
+		overflow: auto;
+	}
+	.col-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 6px;
+		border-radius: 8px;
+		transition: background-color 0.15s ease;
+	}
+	.col-item:hover {
+		background: #f6f6f6;
+	}
+	.col-item input[type='checkbox'] {
+		width: 16px;
+		height: 16px;
+	}
+	.col-name {
+		font-size: 0.95rem;
+		color: #222;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
+	}
+	.dup-choices {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		padding: 8px;
+		border: 1px dashed #e0e0e0;
+		border-radius: 10px;
+		background: #fffef8;
+	}
+
+	/* Replace box for empty cells */
+	.replace-box {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+		padding: 8px;
+		border: 1px solid #e6e6e6;
+		border-radius: 10px;
+		background: #fff;
+	}
+	.replace-box strong {
+		font-size: 1rem;
+		color: #333;
+	}
+	.replace-box label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.replace-box input[type='radio'] {
+		width: 16px;
+		height: 16px;
+	}
+	.replace-box .fill-input {
+		flex: 1;
+	}
+
+	/* Danger box for delete confirmation */
+	.danger-box {
+		margin-top: 4px;
+		padding: 8px;
+		border: 1px solid #f0d3d3;
+		border-radius: 10px;
+		background: #fff7f7;
+	}
+	.danger-box .confirm {
+		margin-top: 6px;
+		padding: 8px;
+		border: 1px dashed #e0bcbc;
+		border-radius: 8px;
+		background: #fff;
+	}
+
+	/* Styled select to match site UI */
+	.select-wrap {
+		position: relative;
+		width: 240px;
+		max-width: 100%;
+	}
+	.select {
+		appearance: none;
+		-webkit-appearance: none;
+		width: 100%;
+		padding: 0.45rem 2rem 0.45rem 0.6rem;
+		border: 1px solid #ddd;
+		border-radius: 8px;
+		background: #fff;
+		font: inherit;
+		color: #222;
+		line-height: 1.2;
+		transition:
+			border-color 0.15s ease,
+			box-shadow 0.15s ease,
+			background-color 0.15s ease;
+	}
+	.select:hover {
+		border-color: #cfcfcf;
+	}
+	.select:focus {
+		outline: none;
+		border-color: #4a90e2;
+		box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.2);
+	}
+	.select:disabled {
+		background: #f5f5f5;
+		border-color: #eee;
+		color: #888;
+		cursor: not-allowed;
+	}
+	.select[disabled] + .select-icon {
+		opacity: 0.5;
+	}
+	.select-icon {
+		position: absolute;
+		right: 8px;
+		top: 50%;
+		transform: translateY(-50%);
+		pointer-events: none;
+		color: #666;
+		font-size: 18px;
+	}
+</style>
