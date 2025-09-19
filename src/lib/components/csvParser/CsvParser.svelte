@@ -3,6 +3,7 @@
 	import { csvData, clearCSV } from '$lib/stores/csvData';
 	import { downloadCSVFromParsed } from '$lib/utils/csv/export';
 	import { activeFileId } from '$lib/stores/project';
+	import { goto } from '$app/navigation';
 
 	import delete_icon from '$lib/common/delete_icon.svg';
 	import CleanPanel from '$lib/components/CleanPanel/CleanPanel.svelte';
@@ -431,6 +432,10 @@
 			<button onclick={() => (showCleanMenu = true)} title="Data cleaning">
 				<span class="material-symbols-outlined">cleaning_services</span>
 				Clean
+			</button>
+			<button class="secondary" onclick={() => goto('/dataLab')} title="Open in Data Lab">
+				<span class="material-symbols-outlined">functions</span>
+				Data Lab
 			</button>
 		</div>
 	</div>
