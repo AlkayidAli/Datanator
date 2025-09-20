@@ -16,6 +16,7 @@
 		type Transform,
 		type FilterOp
 	} from '$lib/utils/datalab/transform';
+	import type { RowAggOp } from '$lib/utils/datalab/transform';
 
 	// Working pipeline
 	let transforms = $state<Transform[]>([]);
@@ -27,8 +28,10 @@
 	let filterValue = $state(''); // supports comma list for 'in'
 	let filterCase = $state(false);
 
-	let rowAvgCols = $state<string[]>([]);
-	let rowAvgOut = $state('avg');
+	// Row aggregate (generic)
+	let rowAggCols = $state<string[]>([]);
+	let rowAggOut = $state('agg');
+	let rowAggOp = $state<RowAggOp>('avg');
 
 	let appendFileId = $state<string | null>(null);
 	let loadingOther = $state(false);
@@ -122,12 +125,12 @@
 		filterValue = '';
 	}
 
-	function addRowAvg() {
-		const cols = rowAvgCols.filter(Boolean);
-		if (cols.length === 0 || !rowAvgOut.trim()) return;
+	function addRowAgg() {
+		const cols = rowAggCols.filter(Boolean);
+		if (cols.length === 0 || !rowAggOut.trim()) return;
 		transforms = [
 			...transforms,
-			{ kind: 'rowAverage', columns: cols, outColumn: rowAvgOut.trim() }
+			{ kind: 'rowAggregate', columns: cols, outColumn: rowAggOut.trim(), op: rowAggOp }
 		];
 	}
 
@@ -194,7 +197,67 @@
 	}
 
 	function toggleRowAvgCol(h: string) {
-		rowAvgCols = rowAvgCols.includes(h) ? rowAvgCols.filter((x) => x !== h) : [...rowAvgCols, h];
+		rowAggCols = rowAggCols.includes(h) ? rowAggCols.filter((x) => x !== h) : [...rowAggCols, h];
+	}
+
+	// --- Column aggregate (one-value result over current dataset) ---
+	let colAggColumn = $state<string | null>(null);
+	let colAggOp = $state<RowAggOp>('avg');
+	const colAggValue = $derived.by<number | null>(() => {
+		const data = tableData;
+		if (!data || !colAggColumn) return null;
+		const vals = data.rows.map((r) => r[colAggColumn!]);
+		const nums: number[] = [];
+		let nn = 0;
+		for (const v of vals) {
+			if (v != null && v !== '') nn++;
+			const n = typeof v === 'number' ? v : Number(v as any);
+			if (Number.isFinite(n)) nums.push(n);
+		}
+		switch (colAggOp) {
+			case 'avg':
+				return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+			case 'sum':
+				return nums.length ? nums.reduce((a, b) => a + b, 0) : null;
+			case 'min':
+				return nums.length ? Math.min(...nums) : null;
+			case 'max':
+				return nums.length ? Math.max(...nums) : null;
+			case 'median': {
+				if (!nums.length) return null;
+				const s = [...nums].sort((a, b) => a - b);
+				const mid = Math.floor(s.length / 2);
+				return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+			}
+			case 'countNonNull':
+				return nn;
+		}
+	});
+
+	// Save column aggregate as a new one-column tab
+	async function saveColAggAsTab() {
+		if (!$currentProject || !baseData || !colAggColumn || colAggValue === null) return;
+		const label = `${colAggOp}(${colAggColumn})`;
+		const snapshot = {
+			filename: `${baseData.filename} | ${label}`,
+			headers: [label],
+			rows: [{ [label]: colAggValue }]
+		} as ParsedCSV;
+		const res = await fetch(`/api/projects/${$currentProject.project_id}/files`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			credentials: 'same-origin',
+			body: JSON.stringify({
+				name: `${getDisplayName()} | ${label}`.slice(0, 120),
+				originalFilename: baseData.filename,
+				snapshot
+			})
+		});
+		if (!res.ok) return;
+		const created = await res.json();
+		setFileState(created.file_id, snapshot);
+		await refreshFilesList();
+		activeFileId.set(created.file_id);
 	}
 
 	// Cell edit helpers
@@ -465,15 +528,15 @@
 			<section class="tool">
 				<h3>Filter rows</h3>
 				<div class="row">
-					<label>Column</label>
-					<select bind:value={filterColumn}>
+					<label for="filter-rows">Column</label>
+					<select id="filter-rows" bind:value={filterColumn}>
 						<option value={null as any} disabled selected>Select column</option>
 						{#each headers as h}<option value={h}>{h}</option>{/each}
 					</select>
 				</div>
 				<div class="row">
-					<label>Operator</label>
-					<select bind:value={filterOp}>
+					<label for="filter-operator">Operator</label>
+					<select id="filter-operator" bind:value={filterOp}>
 						<option value="eq">equals</option>
 						<option value="neq">not equals</option>
 						<option value="contains">contains</option>
@@ -481,8 +544,14 @@
 					</select>
 				</div>
 				<div class="row">
-					<label>{filterOp === 'in' ? 'Values (comma separated)' : 'Value'}</label>
-					<input bind:value={filterValue} placeholder={filterOp === 'in' ? 'a, b, c' : 'value'} />
+					<label for="filter-value"
+						>{filterOp === 'in' ? 'Values (comma separated)' : 'Value'}</label
+					>
+					<input
+						id="filter-value"
+						bind:value={filterValue}
+						placeholder={filterOp === 'in' ? 'a, b, c' : 'value'}
+					/>
 				</div>
 				<label class="inline">
 					<input
@@ -498,13 +567,60 @@
 			</section>
 
 			<section class="tool">
-				<h3>Row average</h3>
+				<h3>Column aggregate</h3>
+				<div class="row">
+					<label for="col-agg-column">Column</label>
+					<select id="col-agg-column" bind:value={colAggColumn}>
+						<option value={null as any} disabled selected>Select column</option>
+						{#each headers as h}<option value={h}>{h}</option>{/each}
+					</select>
+				</div>
+				<div class="row">
+					<label for="col-agg-op">Operation</label>
+					<select bind:value={colAggOp}>
+						<option value="avg">Average</option>
+						<option value="sum">Sum</option>
+						<option value="min">Min</option>
+						<option value="max">Max</option>
+						<option value="median">Median</option>
+						<option value="countNonNull">Count (non‑null)</option>
+					</select>
+				</div>
+				<div class="row">
+					<label for="col-agg-result">Result</label>
+					<strong>{colAggValue ?? '-'}</strong>
+				</div>
+				<div class="actions">
+					<button
+						class="primary"
+						onclick={saveColAggAsTab}
+						disabled={!colAggColumn || colAggValue === null}
+					>
+						Save as new tab
+					</button>
+				</div>
+				<p class="hint">Computes over the current dataset (Preview if active, otherwise base).</p>
+			</section>
+
+			<section class="tool">
+				<h3>Row aggregate</h3>
+				<div class="row">
+					<label for="row-agg-op">Operation</label>
+					<select id="row-agg-op" bind:value={rowAggOp}>
+						<option value="avg">Average</option>
+						<option value="sum">Sum</option>
+						<option value="min">Min</option>
+						<option value="max">Max</option>
+						<option value="median">Median</option>
+						<option value="countNonNull">Count (non‑null)</option>
+					</select>
+				</div>
 				<div class="cols">
 					{#each headers as h}
 						<label class="chk">
 							<input
 								type="checkbox"
-								checked={rowAvgCols.includes(h)}
+								checked={rowAggCols.includes(h)}
 								onchange={() => toggleRowAvgCol(h)}
 							/>
 							<span>{h}</span>
@@ -512,23 +628,28 @@
 					{/each}
 				</div>
 				<div class="row">
-					<label>Output column</label>
-					<input bind:value={rowAvgOut} placeholder="avg" />
+					<label for="row-agg-out">Output column</label>
+					<input
+						id="row-agg-out"
+						class="row-agg-out-input"
+						bind:value={rowAggOut}
+						placeholder="agg"
+					/>
 				</div>
 				<div class="actions">
 					<button
 						class="secondary"
-						onclick={addRowAvg}
-						disabled={rowAvgCols.length === 0 || !rowAvgOut.trim()}
+						onclick={addRowAgg}
+						disabled={rowAggCols.length === 0 || !rowAggOut.trim()}
 					>
-						Add row average
+						Add row aggregate
 					</button>
 				</div>
 			</section>
 
 			<section class="tool">
 				<h3>Append another file</h3>
-				<select bind:value={appendFileId}>
+				<select bind:value={appendFileId} class="file-select">
 					<option value={null as any} disabled selected>Select file to append</option>
 					{#each appendCandidates as f}
 						<option value={f.file_id}>{f.name}</option>
@@ -769,7 +890,9 @@
 	</div>
 {/if}
 
-<style>
+<style lang="scss">
+	@use '../../../styles/global.scss' as global;
+
 	.lab {
 		display: flex;
 		gap: 16px;
@@ -785,6 +908,7 @@
 		flex: 1 1 auto;
 		min-width: 0;
 	}
+
 	h2 {
 		margin: 0 0 4px;
 	}
@@ -792,33 +916,56 @@
 	.muted {
 		color: #666;
 	}
+
+	/* Card styling (match CsvHome .card) */
 	.tool {
 		border: 1px solid #e6e6e6;
-		border-radius: 10px;
-		padding: 10px;
+		border-radius: 12px;
+		padding: 12px;
 		background: #fff;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 	}
 	.tool h3 {
-		margin: 0 0 6px;
-		font-size: 1rem;
+		margin: 0 0 8px;
+		font-size: 1.05rem;
 	}
+
+	/* Inputs/selects (match CsvHome feel) */
+	.tool select,
+	.tool input[type='text'],
+	.tool input:not([type]) {
+		padding: 6px 10px;
+		border: 1px solid #ddd;
+		border-radius: 8px;
+		background: #fff;
+		color: #222;
+		font-size: 0.95rem;
+	}
+	.tool select:focus,
+	.tool input:focus {
+		border-color: #4a90e2;
+		outline: none;
+	}
+
 	.row {
 		display: flex;
 		gap: 8px;
 		align-items: center;
-		margin: 6px 0;
+		margin: 8px 0;
 	}
 	.row > label {
-		min-width: 96px;
+		min-width: 120px;
 		color: #333;
+		font-weight: 500;
 	}
+
 	.inline {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
 		margin-top: 4px;
 	}
+
 	.cols {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -826,16 +973,18 @@
 		max-height: 180px;
 		overflow: auto;
 		border: 1px solid #eee;
-		border-radius: 8px;
-		padding: 6px;
+		border-radius: 10px;
+		padding: 8px;
+		background: #fafafa;
 	}
 	.chk {
 		display: flex;
 		gap: 6px;
 		align-items: center;
 	}
+
 	.pipeline ul {
-		margin: 4px 0;
+		margin: 6px 0 0;
 		padding: 0;
 		list-style: none;
 		display: flex;
@@ -851,29 +1000,71 @@
 		color: #123;
 		font-size: 0.85rem;
 	}
-	.link {
+
+	/* Buttons (match CsvHome button palette) */
+	button {
+		cursor: pointer;
+		width: fit-content;
+	}
+	.actions {
+		display: flex;
+		gap: 8px;
+		margin-top: 8px;
+	}
+
+	button.primary {
+		min-height: 40px;
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		border-radius: 10px;
+		padding: 8px 12px;
+		border: 1px solid global.$text-grey-10;
+		background: global.$background-primary-color;
+		color: global.$text-white;
+		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+	}
+	button.primary:hover {
+		background: global.$background-secondary-color;
+		border-color: global.$background-primary-color;
+		color: global.$text-grey-90;
+		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+	}
+	button.secondary {
+		min-height: 36px;
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		border-radius: 10px;
+		padding: 6px 10px;
+		border: 1px solid global.$text-grey-10;
+		background: #fff;
+		color: #222;
+	}
+	button.secondary:hover {
+		background: global.$background-secondary-color;
+	}
+	button.link {
 		background: transparent;
 		border: none;
 		color: #0b5fff;
 		text-decoration: underline;
 		padding: 0 4px;
-		cursor: pointer;
 	}
-	.actions {
-		display: flex;
-		gap: 8px;
-		margin-top: 6px;
-	}
+
 	.head {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
-		margin-bottom: 6px;
+		margin-bottom: 8px;
 	}
+
 	.table-wrap {
 		border: 1px solid #e6e6e6;
-		border-radius: 10px;
+		border-radius: 12px;
 		overflow: auto;
+		background: #fff;
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 	}
 	table {
 		border-collapse: collapse;
@@ -884,7 +1075,7 @@
 	th,
 	td {
 		border: 1px solid #eee;
-		padding: 4px 6px;
+		padding: 6px 8px;
 		text-align: left;
 	}
 	th {
@@ -898,6 +1089,7 @@
 		outline-offset: -2px;
 	}
 
+	/* Edit toolbar */
 	.manip-toolbar {
 		display: flex;
 		gap: 1rem;
@@ -911,7 +1103,7 @@
 		gap: 0.4rem;
 		font-size: 1rem;
 		padding: 0.5rem 1.1rem;
-		border-radius: 8px;
+		border-radius: 10px;
 	}
 	.add-col-group {
 		display: flex;
@@ -921,7 +1113,7 @@
 	.add-col-input {
 		padding: 0.5rem 0.9rem;
 		border: 1px solid #ddd;
-		border-radius: 6px;
+		border-radius: 8px;
 		font-size: 1rem;
 		min-width: 180px;
 		transition: border-color 0.15s;
@@ -936,9 +1128,10 @@
 		gap: 0.35rem;
 		font-size: 1rem;
 		padding: 0.5rem 1.1rem;
-		border-radius: 8px;
+		border-radius: 10px;
 	}
 
+	/* Bulk selection toolbar */
 	.bulk-toolbar {
 		display: flex;
 		align-items: center;
@@ -946,7 +1139,7 @@
 		padding: 0.5rem 0.6rem;
 		margin: 0.5rem 0;
 		border: 1px solid #e5e5e5;
-		border-radius: 6px;
+		border-radius: 8px;
 		background: #fbfbfb;
 	}
 	.bulk-toolbar .danger {
@@ -968,6 +1161,7 @@
 		text-align: center;
 	}
 
+	/* Header rename */
 	.header-cell {
 		cursor: pointer;
 		user-select: none;
@@ -981,19 +1175,20 @@
 		box-sizing: border-box;
 		padding: 4px 6px;
 		border: 1px solid #4a90e2;
-		border-radius: 4px;
+		border-radius: 6px;
 		font: inherit;
 		color: inherit;
 		background: #fff;
 	}
 
+	/* Header floating menu (same look as CsvParser) */
 	.header-menu {
 		position: fixed;
 		min-width: 200px;
 		max-width: 260px;
 		background: #fff;
 		border: 1px solid #e5e5e5;
-		border-radius: 8px;
+		border-radius: 10px;
 		box-shadow: 0 10px 24px rgba(0, 0, 0, 0.15);
 		padding: 6px;
 		display: flex;
@@ -1010,7 +1205,7 @@
 		background: transparent;
 		text-align: left;
 		width: 100%;
-		border-radius: 6px;
+		border-radius: 8px;
 		font-size: 0.95rem;
 		color: #222;
 		transition:
@@ -1030,6 +1225,7 @@
 		background: #fff3f3;
 	}
 
+	/* Pagination (match CsvHome) */
 	.pagination {
 		margin: 0.5rem 0;
 		display: flex;
@@ -1055,7 +1251,7 @@
 	.rows-select {
 		padding: 0.45rem 1.1rem 0.45rem 0.7rem;
 		border: 1px solid #ddd;
-		border-radius: 6px;
+		border-radius: 8px;
 		background: #fff;
 		font-size: 1rem;
 		color: #222;
@@ -1066,5 +1262,35 @@
 	.rows-select:focus {
 		border-color: #4a90e2;
 		outline: none;
+	}
+
+	.file-select {
+		max-width: 100%;
+	}
+	.row-agg-out-input {
+		max-width: 100%;
+	}
+
+	/* Keep inputs/selects inside the tool padding */
+	.tool * {
+		box-sizing: border-box;
+	}
+	.tool .row > select,
+	.tool .row > input[type='text'],
+	.tool .row > input:not([type]) {
+		flex: 1 1 auto; /* take remaining space next to the label */
+		min-width: 0; /* allow shrinking to fit */
+		max-width: 100%; /* never overflow parent */
+	}
+	/* Make standalone selects inside tools respect width */
+	.tool select.file-select,
+	.tool input.row-agg-out-input {
+		width: 100%;
+		max-width: 100%;
+	}
+
+	/* Optional: clip inner shadows/rounded corners exactly to card */
+	.tool {
+		overflow: hidden;
 	}
 </style>

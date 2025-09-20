@@ -2,9 +2,15 @@ import type { ParsedCSV, CellValue } from '$lib/stores/csvData';
 
 export type FilterOp = 'eq' | 'neq' | 'contains' | 'in';
 
+// New ops
+export type RowAggOp = 'avg' | 'sum' | 'min' | 'max' | 'median' | 'countNonNull';
+
 export type Transform =
   | { kind: 'filterRows'; column: string; op: FilterOp; value: string | string[]; caseSensitive?: boolean }
+  // keep backward-compatible rowAverage
   | { kind: 'rowAverage'; columns: string[]; outColumn: string }
+  // new generic row aggregate
+  | { kind: 'rowAggregate'; columns: string[]; outColumn: string; op: RowAggOp }
   | { kind: 'appendFile'; other: ParsedCSV };
 
 export function applyTransforms(base: ParsedCSV, transforms: Transform[]): ParsedCSV {
@@ -16,7 +22,11 @@ export function applyTransforms(base: ParsedCSV, transforms: Transform[]): Parse
         cur = filterRows(cur, t);
         break;
       case 'rowAverage':
-        cur = rowAverage(cur, t.columns, t.outColumn);
+        // deprecated: route to rowAggregate(avg)
+        cur = rowAggregate(cur, t.columns, t.outColumn, 'avg');
+        break;
+      case 'rowAggregate':
+        cur = rowAggregate(cur, t.columns, t.outColumn, t.op);
         break;
       case 'appendFile':
         cur = appendFile(cur, t.other);
@@ -41,6 +51,8 @@ export function summarizeTransforms(transforms: Transform[]): string {
         }
         case 'rowAverage':
           return `RowAvg(${t.columns.join(',')}) -> ${t.outColumn}`;
+        case 'rowAggregate':
+          return `RowAgg ${t.op}(${t.columns.join(',')}) -> ${t.outColumn}`;
         case 'appendFile':
           return `Append(${t.other.filename})`;
       }
@@ -88,17 +100,50 @@ function toNumber(v: CellValue): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function rowAverage(csv: ParsedCSV, columns: string[], outColumn: string): ParsedCSV {
+function rowAggregate(csv: ParsedCSV, columns: string[], outColumn: string, op: RowAggOp): ParsedCSV {
   const headers = csv.headers.includes(outColumn) ? csv.headers : [...csv.headers, outColumn];
   const rows = csv.rows.map((r) => {
-    let sum = 0;
-    let cnt = 0;
+    const nums: number[] = [];
+    let countNonNull = 0;
     for (const c of columns) {
-      const n = toNumber(r[c] ?? null);
-      if (n != null) { sum += n; cnt++; }
+      const raw = r[c] ?? null;
+      const n = toNumber(raw);
+      if (raw != null && raw !== '') countNonNull++;
+      if (n != null) nums.push(n);
     }
-    const avg = cnt > 0 ? sum / cnt : null;
-    return { ...r, [outColumn]: avg as any };
+
+    let out: CellValue = null;
+    switch (op) {
+      case 'avg': {
+        if (nums.length) out = nums.reduce((a, b) => a + b, 0) / nums.length;
+        break;
+      }
+      case 'sum': {
+        if (nums.length) out = nums.reduce((a, b) => a + b, 0);
+        break;
+      }
+      case 'min': {
+        if (nums.length) out = Math.min(...nums);
+        break;
+      }
+      case 'max': {
+        if (nums.length) out = Math.max(...nums);
+        break;
+      }
+      case 'median': {
+        if (nums.length) {
+          const s = [...nums].sort((a, b) => a - b);
+          const mid = Math.floor(s.length / 2);
+          out = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+        }
+        break;
+      }
+      case 'countNonNull': {
+        out = countNonNull;
+        break;
+      }
+    }
+    return { ...r, [outColumn]: out as any };
   });
   return { ...csv, headers, rows };
 }
