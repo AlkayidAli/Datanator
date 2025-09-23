@@ -41,6 +41,18 @@
 	let selectedCell = $state<{ rowLocal: number; header: string } | null>(null);
 	let editingCell = $state<{ rowLocal: number; header: string } | null>(null);
 
+	// Collapsible sections
+	type SectionKey = 'filter' | 'colAgg' | 'rowAgg' | 'append';
+	let collapsed = $state<Record<SectionKey, boolean>>({
+		filter: false,
+		colAgg: false,
+		rowAgg: false,
+		append: false
+	});
+	function toggle(section: SectionKey) {
+		collapsed = { ...collapsed, [section]: !collapsed[section] };
+	}
+
 	// Header context menu and rename state
 	let headerMenu = $state<{ header: string; x: number; y: number } | null>(null);
 	let headerMenuEl = $state<HTMLDivElement | null>(null);
@@ -486,11 +498,28 @@
 		if (target?.closest('input,button')) return;
 		handleHeaderClick(h, evt); // positions the floating menu
 	}
+
+	// Back to projects (same behavior as Csvparser)
+	function backToProjects() {
+		activeFileId.set(null);
+	}
 </script>
 
 <svelte:window onkeydown={onKey} onclick={() => (headerMenu = null)} />
 
-{#if !$activeFileId || !baseData}
+<!-- Top util bar (only when a project is selected) -->
+{#if $currentProject}
+	<div class="util-bar">
+		<button class="secondary" onclick={backToProjects} title="Back to projects">
+			<span class="material-symbols-outlined">arrow_back</span>
+			Projects
+		</button>
+	</div>
+{/if}
+
+{#if !$currentProject}
+	<p>Select a project to continue.</p>
+{:else if !$activeFileId || !baseData}
 	<p>Open a dataset first (select a file tab), then come back to Data Lab.</p>
 {:else}
 	<div class="lab">
@@ -525,160 +554,239 @@
 				</div>
 			{/if}
 
-			<section class="tool">
-				<h3>Filter rows</h3>
-				<div class="row">
-					<label for="filter-rows">Column</label>
-					<select id="filter-rows" bind:value={filterColumn}>
-						<option value={null as any} disabled selected>Select column</option>
-						{#each headers as h}<option value={h}>{h}</option>{/each}
-					</select>
+			<!-- Pipeline on top (styled like a tool, not collapsible) -->
+			<section class="tool pipeline">
+				<div class="tool-head static">
+					<h3 class="tool-title">Pipeline</h3>
 				</div>
-				<div class="row">
-					<label for="filter-operator">Operator</label>
-					<select id="filter-operator" bind:value={filterOp}>
-						<option value="eq">equals</option>
-						<option value="neq">not equals</option>
-						<option value="contains">contains</option>
-						<option value="in">in list</option>
-					</select>
-				</div>
-				<div class="row">
-					<label for="filter-value"
-						>{filterOp === 'in' ? 'Values (comma separated)' : 'Value'}</label
-					>
-					<input
-						id="filter-value"
-						bind:value={filterValue}
-						placeholder={filterOp === 'in' ? 'a, b, c' : 'value'}
-					/>
-				</div>
-				<label class="inline">
-					<input
-						type="checkbox"
-						checked={filterCase}
-						onchange={(e) => (filterCase = (e.target as HTMLInputElement).checked)}
-					/>
-					Case sensitive
-				</label>
-				<div class="actions">
-					<button class="secondary" onclick={addFilter} disabled={!filterColumn}>Add filter</button>
+				<div class="tool-body">
+					{#if transforms.length > 0}
+						<ul>
+							{#each transforms as t, i}
+								<li>
+									<span class="chip">{summarizeTransforms([t])}</span>
+									<button class="link" onclick={() => removeTransform(i)}>remove</button>
+								</li>
+							{/each}
+						</ul>
+						<div class="actions">
+							<button onclick={buildPreview} title="Apply transforms for preview">Preview</button>
+							<button class="primary" onclick={saveAsNewTab}>Save as new tab</button>
+						</div>
+					{:else}
+						<p class="hint">No transforms yet. Add filters/functions below.</p>
+					{/if}
 				</div>
 			</section>
 
-			<section class="tool">
-				<h3>Column aggregate</h3>
-				<div class="row">
-					<label for="col-agg-column">Column</label>
-					<select id="col-agg-column" bind:value={colAggColumn}>
-						<option value={null as any} disabled selected>Select column</option>
-						{#each headers as h}<option value={h}>{h}</option>{/each}
-					</select>
-				</div>
-				<div class="row">
-					<label for="col-agg-op">Operation</label>
-					<select bind:value={colAggOp}>
-						<option value="avg">Average</option>
-						<option value="sum">Sum</option>
-						<option value="min">Min</option>
-						<option value="max">Max</option>
-						<option value="median">Median</option>
-						<option value="countNonNull">Count (non‑null)</option>
-					</select>
-				</div>
-				<div class="row">
-					<label for="col-agg-result">Result</label>
-					<strong>{colAggValue ?? '-'}</strong>
-				</div>
-				<div class="actions">
-					<button
-						class="primary"
-						onclick={saveColAggAsTab}
-						disabled={!colAggColumn || colAggValue === null}
+			<!-- Filter rows (collapsible) -->
+			<section class="tool" class:collapsed={collapsed.filter}>
+				<button
+					type="button"
+					class="tool-head"
+					onclick={() => toggle('filter')}
+					aria-expanded={!collapsed.filter}
+					aria-controls="tool-filter"
+				>
+					<h3 class="tool-title">Filter rows</h3>
+					<span class="material-symbols-outlined chevron"
+						>{collapsed.filter ? 'chevron_right' : 'expand_more'}</span
 					>
-						Save as new tab
-					</button>
-				</div>
-				<p class="hint">Computes over the current dataset (Preview if active, otherwise base).</p>
-			</section>
-
-			<section class="tool">
-				<h3>Row aggregate</h3>
-				<div class="row">
-					<label for="row-agg-op">Operation</label>
-					<select id="row-agg-op" bind:value={rowAggOp}>
-						<option value="avg">Average</option>
-						<option value="sum">Sum</option>
-						<option value="min">Min</option>
-						<option value="max">Max</option>
-						<option value="median">Median</option>
-						<option value="countNonNull">Count (non‑null)</option>
-					</select>
-				</div>
-				<div class="cols">
-					{#each headers as h}
-						<label class="chk">
+				</button>
+				{#if !collapsed.filter}
+					<div id="tool-filter" class="tool-body">
+						<div class="row">
+							<label for="filter-rows">Column</label>
+							<select id="filter-rows" bind:value={filterColumn}>
+								<option value={null as any} disabled selected>Select column</option>
+								{#each headers as h}<option value={h}>{h}</option>{/each}
+							</select>
+						</div>
+						<div class="row">
+							<label for="filter-operator">Operator</label>
+							<select id="filter-operator" bind:value={filterOp}>
+								<option value="eq">equals</option>
+								<option value="neq">not equals</option>
+								<option value="contains">contains</option>
+								<option value="in">in list</option>
+							</select>
+						</div>
+						<div class="row">
+							<label for="filter-value"
+								>{filterOp === 'in' ? 'Values (comma separated)' : 'Value'}</label
+							>
+							<input
+								id="filter-value"
+								bind:value={filterValue}
+								placeholder={filterOp === 'in' ? 'a, b, c' : 'value'}
+							/>
+						</div>
+						<label class="inline">
 							<input
 								type="checkbox"
-								checked={rowAggCols.includes(h)}
-								onchange={() => toggleRowAvgCol(h)}
+								checked={filterCase}
+								onchange={(e) => (filterCase = (e.target as HTMLInputElement).checked)}
 							/>
-							<span>{h}</span>
+							Case sensitive
 						</label>
-					{/each}
-				</div>
-				<div class="row">
-					<label for="row-agg-out">Output column</label>
-					<input
-						id="row-agg-out"
-						class="row-agg-out-input"
-						bind:value={rowAggOut}
-						placeholder="agg"
-					/>
-				</div>
-				<div class="actions">
-					<button
-						class="secondary"
-						onclick={addRowAgg}
-						disabled={rowAggCols.length === 0 || !rowAggOut.trim()}
+						<div class="actions">
+							<button class="secondary" onclick={addFilter} disabled={!filterColumn}
+								>Add filter</button
+							>
+						</div>
+					</div>
+				{/if}
+			</section>
+
+			<!-- Column aggregate (collapsible) -->
+			<section class="tool" class:collapsed={collapsed.colAgg}>
+				<button
+					type="button"
+					class="tool-head"
+					onclick={() => toggle('colAgg')}
+					aria-expanded={!collapsed.colAgg}
+					aria-controls="tool-col-agg"
+				>
+					<h3 class="tool-title">Column aggregate</h3>
+					<span class="material-symbols-outlined chevron"
+						>{collapsed.colAgg ? 'chevron_right' : 'expand_more'}</span
 					>
-						Add row aggregate
-					</button>
-				</div>
+				</button>
+				{#if !collapsed.colAgg}
+					<div id="tool-col-agg" class="tool-body">
+						<div class="row">
+							<label for="col-agg-column">Column</label>
+							<select id="col-agg-column" bind:value={colAggColumn}>
+								<option value={null as any} disabled selected>Select column</option>
+								{#each headers as h}<option value={h}>{h}</option>{/each}
+							</select>
+						</div>
+						<div class="row">
+							<label for="col-agg-op">Operation</label>
+							<select bind:value={colAggOp}>
+								<option value="avg">Average</option>
+								<option value="sum">Sum</option>
+								<option value="min">Min</option>
+								<option value="max">Max</option>
+								<option value="median">Median</option>
+								<option value="countNonNull">Count (non‑null)</option>
+							</select>
+						</div>
+						<div class="row">
+							<label for="col-agg-result">Result</label>
+							<strong>{colAggValue ?? '-'}</strong>
+						</div>
+						<div class="actions">
+							<button
+								class="primary"
+								onclick={saveColAggAsTab}
+								disabled={!colAggColumn || colAggValue === null}
+							>
+								Save as new tab
+							</button>
+						</div>
+						<p class="hint">
+							Computes over the current dataset (Preview if active, otherwise base).
+						</p>
+					</div>
+				{/if}
 			</section>
 
-			<section class="tool">
-				<h3>Append another file</h3>
-				<select bind:value={appendFileId} class="file-select">
-					<option value={null as any} disabled selected>Select file to append</option>
-					{#each appendCandidates as f}
-						<option value={f.file_id}>{f.name}</option>
-					{/each}
-				</select>
-				<div class="actions">
-					<button class="secondary" onclick={addAppend} disabled={!appendFileId || loadingOther}>
-						{loadingOther ? 'Loading…' : 'Add append'}
-					</button>
-				</div>
+			<!-- Row aggregate (collapsible) -->
+			<section class="tool" class:collapsed={collapsed.rowAgg}>
+				<button
+					type="button"
+					class="tool-head"
+					onclick={() => toggle('rowAgg')}
+					aria-expanded={!collapsed.rowAgg}
+					aria-controls="tool-row-agg"
+				>
+					<h3 class="tool-title">Row aggregate</h3>
+					<span class="material-symbols-outlined chevron"
+						>{collapsed.rowAgg ? 'chevron_right' : 'expand_more'}</span
+					>
+				</button>
+				{#if !collapsed.rowAgg}
+					<div id="tool-row-agg" class="tool-body">
+						<div class="row">
+							<label for="row-agg-op">Operation</label>
+							<select id="row-agg-op" bind:value={rowAggOp}>
+								<option value="avg">Average</option>
+								<option value="sum">Sum</option>
+								<option value="min">Min</option>
+								<option value="max">Max</option>
+								<option value="median">Median</option>
+								<option value="countNonNull">Count (non‑null)</option>
+							</select>
+						</div>
+						<div class="cols">
+							{#each headers as h}
+								<label class="chk">
+									<input
+										type="checkbox"
+										checked={rowAggCols.includes(h)}
+										onchange={() => toggleRowAvgCol(h)}
+									/>
+									<span>{h}</span>
+								</label>
+							{/each}
+						</div>
+						<div class="row">
+							<label for="row-agg-out">Output column</label>
+							<input
+								id="row-agg-out"
+								class="row-agg-out-input"
+								bind:value={rowAggOut}
+								placeholder="agg"
+							/>
+						</div>
+						<div class="actions">
+							<button
+								class="secondary"
+								onclick={addRowAgg}
+								disabled={rowAggCols.length === 0 || !rowAggOut.trim()}
+							>
+								Add row aggregate
+							</button>
+						</div>
+					</div>
+				{/if}
 			</section>
 
-			{#if transforms.length > 0}
-				<section class="pipeline">
-					<h3>Pipeline</h3>
-					<ul>
-						{#each transforms as t, i}
-							<li>
-								<span class="chip">{summarizeTransforms([t])}</span>
-								<button class="link" onclick={() => removeTransform(i)}>remove</button>
-							</li>
-						{/each}
-					</ul>
-				</section>
-				<div class="actions">
-					<button onclick={buildPreview} title="Apply transforms for preview">Preview</button>
-					<button class="primary" onclick={saveAsNewTab}>Save as new tab</button>
-				</div>
-			{/if}
+			<!-- Append another file (collapsible) -->
+			<section class="tool" class:collapsed={collapsed.append}>
+				<button
+					type="button"
+					class="tool-head"
+					onclick={() => toggle('append')}
+					aria-expanded={!collapsed.append}
+					aria-controls="tool-append"
+				>
+					<h3 class="tool-title">Append another file</h3>
+					<span class="material-symbols-outlined chevron"
+						>{collapsed.append ? 'chevron_right' : 'expand_more'}</span
+					>
+				</button>
+				{#if !collapsed.append}
+					<div id="tool-append" class="tool-body">
+						<select bind:value={appendFileId} class="file-select">
+							<option value={null as any} disabled selected>Select file to append</option>
+							{#each appendCandidates as f}
+								<option value={f.file_id}>{f.name}</option>
+							{/each}
+						</select>
+						<div class="actions">
+							<button
+								class="secondary"
+								onclick={addAppend}
+								disabled={!appendFileId || loadingOther}
+							>
+								{loadingOther ? 'Loading…' : 'Add append'}
+							</button>
+						</div>
+					</div>
+				{/if}
+			</section>
 		</div>
 
 		<div class="right">
@@ -893,6 +1001,14 @@
 <style lang="scss">
 	@use '../../../styles/global.scss' as global;
 
+	/* Util bar to match Csvparser look */
+	.util-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.5rem;
+	}
+
 	.lab {
 		display: flex;
 		gap: 16px;
@@ -926,8 +1042,38 @@
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 	}
 	.tool h3 {
-		margin: 0 0 8px;
+		font-size: 1.1rem;
+	}
+
+	/* Collapsible tool headers */
+	.tool-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		width: 100%;
+		background: transparent;
+		border: 0;
+		padding: 0;
+		text-align: left;
+		cursor: pointer;
+	}
+	.tool-head.static {
+		cursor: default;
+	}
+	.tool-title {
+		margin: 0;
 		font-size: 1.05rem;
+		font-weight: 600;
+	}
+	.chevron {
+		transition: transform 0.16s ease;
+	}
+	.tool.collapsed .chevron {
+		transform: rotate(-90deg);
+	}
+	.tool-body {
+		display: block;
 	}
 
 	/* Inputs/selects (match CsvHome feel) */
@@ -1274,6 +1420,7 @@
 	/* Keep inputs/selects inside the tool padding */
 	.tool * {
 		box-sizing: border-box;
+		box-shadow: none;
 	}
 	.tool .row > select,
 	.tool .row > input[type='text'],

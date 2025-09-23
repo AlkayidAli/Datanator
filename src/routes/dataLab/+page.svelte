@@ -7,9 +7,6 @@
 </script>
 
 <div class="page">
-	<!-- Project picker (select/create project) -->
-	<ProjectBar />
-
 	{#if $currentProject && $projectFiles.length > 0}
 		<FileTabs />
 	{/if}
