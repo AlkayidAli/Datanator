@@ -21,6 +21,7 @@
 	// Working pipeline
 	let transforms = $state<Transform[]>([]);
 	let preview: ParsedCSV | null = $state(null);
+	let previewFileId = $state<string | null>(null); // track which file the preview came from
 
 	// Builders
 	let filterColumn = $state<string | null>(null);
@@ -72,8 +73,17 @@
 		files.filter((f: ProjectFileMeta) => f.file_id !== $activeFileId)
 	);
 
+	// NEW: current opened file name (for top bar display)
+	const currentFileName = $derived.by<string | null>(() => {
+		if (!$activeFileId) return null;
+		const meta = $projectFiles.find((f) => f.file_id === $activeFileId);
+		return meta ? meta.name : null;
+	});
+
 	// What to show in the table (base vs preview)
-	const tableData = $derived<ParsedCSV | null>(editMode ? baseData : (preview ?? baseData));
+	const tableData = $derived<ParsedCSV | null>(
+		editMode ? baseData : preview && previewFileId === $activeFileId ? preview : baseData
+	);
 
 	// Pagination
 	let pageSize = $state(100); // user can change (50/100/200/300)
@@ -167,9 +177,11 @@
 	function buildPreview() {
 		if (!baseData) {
 			preview = null;
+			previewFileId = null;
 			return;
 		}
 		preview = applyTransforms(baseData, transforms);
+		previewFileId = $activeFileId as string;
 	}
 
 	async function saveAsNewTab() {
@@ -514,6 +526,13 @@
 			<span class="material-symbols-outlined">arrow_back</span>
 			Projects
 		</button>
+
+		{#if $activeFileId && currentFileName}
+			<div class="open-file" aria-label="Current file">
+				<span class="material-symbols-outlined file-icon">description</span>
+				<span class="file-name" title={currentFileName}>{currentFileName}</span>
+			</div>
+		{/if}
 	</div>
 {/if}
 
@@ -1001,12 +1020,40 @@
 <style lang="scss">
 	@use '../../../styles/global.scss' as global;
 
-	/* Util bar to match Csvparser look */
+	/* Util bar to match Csvparser look + file name */
 	.util-bar {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
-		margin-bottom: 0.5rem;
+		gap: 0.75rem;
+		margin-bottom: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.open-file {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		max-width: 600px;
+		padding: 6px 12px;
+		background: #fff;
+		border: 1px solid #e2e2e2;
+		border-radius: 10px;
+		box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+		font-size: 0.95rem;
+	}
+	.open-file .file-icon {
+		font-size: 18px;
+		color: #4a6fb7;
+	}
+	.file-name {
+		font-weight: 600;
+		color: #222;
+		max-width: 520px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		display: inline-block;
+		line-height: 1.2;
 	}
 
 	.lab {
