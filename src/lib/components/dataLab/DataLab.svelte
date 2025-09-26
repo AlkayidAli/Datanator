@@ -17,6 +17,7 @@
 		type FilterOp
 	} from '$lib/utils/datalab/transform';
 	import type { RowAggOp } from '$lib/utils/datalab/transform';
+	import { downloadCSVFromParsed } from '$lib/utils/csv/export'; // NEW
 
 	// Working pipeline
 	let transforms = $state<Transform[]>([]);
@@ -515,6 +516,13 @@
 	function backToProjects() {
 		activeFileId.set(null);
 	}
+
+	// Export the currently shown dataset (preview or base)
+	function exportCSV() {
+		const data = tableData;
+		if (!data) return;
+		downloadCSVFromParsed(data);
+	}
 </script>
 
 <svelte:window onkeydown={onKey} onclick={() => (headerMenu = null)} />
@@ -822,6 +830,10 @@
 						disabled={!baseData || !!preview}
 					>
 						{editMode ? 'Editing (on)' : 'Edit mode'}
+					</button>
+					<button class="secondary" onclick={exportCSV} title="Export CSV" disabled={!tableData}>
+						<span class="material-symbols-outlined">file_download</span>
+						Export
 					</button>
 					{#if preview && !editMode}
 						<small class="muted">Editing disabled while preview is active</small>

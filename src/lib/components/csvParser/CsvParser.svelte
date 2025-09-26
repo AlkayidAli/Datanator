@@ -106,6 +106,18 @@
 		currentPage = 1;
 	});
 
+	// Reset highlights and selections when switching files/tabs
+	$effect(() => {
+		$activeFileId; // subscribe to active tab
+		highlightedRows = new Set();
+		highlightedCells = new Set();
+		selectedRows = new Set();
+		selectedCell = null;
+		editingCell = null;
+		headerMenu = null;
+		// optionally: editMode = false;
+	});
+
 	// Keep numeric math robust if <select> binds as string
 	const startIndex = $derived(() => (Number(currentPage) - 1) * Number(pageSize));
 
