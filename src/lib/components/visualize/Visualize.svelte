@@ -4,6 +4,9 @@
 	import type { ParsedCSV } from '$lib/stores/csvData';
 	import { toasts } from '$lib/stores/toastStore';
 	import { goto } from '$app/navigation';
+	import D3Chart from './D3Chart.svelte';
+	import type { ChartSpec } from '$lib/types/visualization';
+	import { createVisualization } from '$lib/api/visualizations';
 
 	// Derived
 	const data = $derived<ParsedCSV | null>(
@@ -22,18 +25,49 @@
 	let width = $state<number | ''>('');
 	let height = $state<number | ''>('');
 
+	// Derived D3 spec (structure only; no rendering logic)
+	const spec = $derived<ChartSpec>({
+		mark: chartType,
+		title: title || undefined,
+		legend: showLegend,
+		encoding: {
+			x: xAxis,
+			y: yAxes,
+			color: colorBy,
+			groupBy
+		},
+		size: {
+			width: typeof width === 'number' && width > 0 ? width : undefined,
+			height: typeof height === 'number' && height > 0 ? height : undefined
+		},
+		options: {}
+	});
+	const renderWidth = $derived<number>(spec.size?.width ?? 800);
+	const renderHeight = $derived<number>(spec.size?.height ?? 500);
+
 	function toggleY(h: string) {
 		yAxes = yAxes.includes(h) ? yAxes.filter((c) => c !== h) : [...yAxes, h];
 	}
 
 	// Placeholder actions
 	function renderChart() {
-		// TODO: You implement chart creation/rendering here (D3, Chart.js, ECharts, etc.)
+		// Rendering handled by <D3Chart>; button acts as a UX cue for now
 		toasts.info('Chart rendering will be added later.');
 	}
-	function saveChartConfig() {
-		// TODO: Persist chart configuration if needed
-		toasts.success('Chart config saved (placeholder).');
+	async function saveChartConfig() {
+		if (!$currentProject || !$activeFileId || !data) return;
+		try {
+			const name = title?.trim() || 'Untitled visualization';
+			await createVisualization({
+				projectId: $currentProject.project_id,
+				fileId: $activeFileId,
+				name,
+				spec
+			});
+			toasts.success('Visualization saved.');
+		} catch (e: any) {
+			toasts.error(e?.message ?? 'Failed to save visualization.');
+		}
 	}
 	function exportChartImage() {
 		// TODO: Export chart as PNG/SVG
@@ -164,11 +198,15 @@
 				<div class="card">
 					<h3>Chart</h3>
 					<div class="chart-area" role="img" aria-label="Chart placeholder">
-						<!-- TODO: render chart here in later steps -->
-						<div class="placeholder">
-							<span class="material-symbols-outlined">insert_chart</span>
-							<p>Chart will render here.</p>
-						</div>
+						<!-- D3 chart placeholder: component mounts SVG; drawing logic to be implemented later -->
+						{#if data}
+							<D3Chart {spec} rows={data.rows} width={renderWidth} height={renderHeight} />
+						{:else}
+							<div class="placeholder">
+								<span class="material-symbols-outlined">insert_chart</span>
+								<p>Chart will render here.</p>
+							</div>
+						{/if}
 					</div>
 					<small class="muted"
 						>Rows: {data.rows.length} | Columns: {data.headers.length} • File: {data.filename}</small
