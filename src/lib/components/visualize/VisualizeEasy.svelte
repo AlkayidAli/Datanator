@@ -12,34 +12,146 @@
 
 	// Simple config
 	let chartType = $state<'line' | 'bar' | 'scatter' | 'pie' | 'area' | 'histogram'>('line');
+
+	// Mappings
 	let xAxis = $state<string | null>(null);
 	let yAxes = $state<string[]>([]);
-	let colorBy = $state<string | null>(null);
-	let groupBy = $state<string | null>(null);
+
+	// Pie/Hist fields
+	let pieValue = $state<string | null>(null);
 	let showLegend = $state(true);
 	let title = $state('');
-	let width = $state<number | ''>('');
-	let height = $state<number | ''>('');
+	let width = $state<number | ''>(''); // px
+	let height = $state<number | ''>(''); // px
+
+	// Visual options
+	let xLabel = $state('');
+	let yLabel = $state('');
+	let paletteText = $state(''); // comma-separated colors
+
+	// Axis tick rotation (needed for bind:value)
+	let xTickRotate = $state<number>(0); // 0..90
+	let yTickRotate = $state<number>(0); // 0..90
+
+	// Line options
+	let lineCurve = $state<'linear' | 'monotone' | 'step' | 'natural'>('linear');
+	let lineStrokeWidth = $state<number>(2);
+
+	// Scatter options
+	let pointRadius = $state<number>(3.5);
+
+	// Bar options
+	let barOrientation = $state<'vertical' | 'horizontal'>('vertical');
+	let barPadding = $state<number>(0.2);
+	let barInnerPadding = $state<number>(0.05);
+
+	// Pie options
+	let pieInnerRatio = $state<number>(0);
+	let piePadAngle = $state<number>(0);
+
+	// Histogram options
+	let histBins = $state<number>(20);
+
+	// Series color overrides
+	let seriesColors = $state<Record<string, string>>({});
 
 	function toggleY(h: string) {
 		yAxes = yAxes.includes(h) ? yAxes.filter((c) => c !== h) : [...yAxes, h];
 	}
+
+	const isPie = $derived<boolean>(chartType === 'pie');
+	const isHist = $derived<boolean>(chartType === 'histogram');
+
+	// Normalize palette from paletteText
+	const palette = $derived.by<string[] | undefined>(() => {
+		const arr = paletteText
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
+		return arr.length ? arr : undefined;
+	});
+
+	// Palette helpers (fix TS errors)
+	function addPaletteColor() {
+		const arr = paletteText
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
+		arr.push('#1f77b4'); // default new color
+		paletteText = arr.join(', ');
+	}
+	function updatePaletteColor(i: number, value: string) {
+		const arr = paletteText
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
+		if (i >= 0 && i < arr.length) arr[i] = value;
+		else arr.push(value);
+		paletteText = arr.join(', ');
+	}
+
+	// Keep seriesColors keys in sync with current Y series
+	$effect(() => {
+		if (isPie || isHist) return;
+		for (const k of yAxes) {
+			if (!seriesColors[k]) {
+				// seed with something visible; fallback colors if no palette yet
+				const seed = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'];
+				seriesColors[k] = seed[yAxes.indexOf(k) % seed.length];
+			}
+		}
+		// prune removed keys
+		for (const k of Object.keys(seriesColors)) {
+			if (!yAxes.includes(k)) delete seriesColors[k];
+		}
+	});
 
 	const spec = $derived<ChartSpec>({
 		mark: chartType,
 		title: title || undefined,
 		legend: showLegend,
 		encoding: {
-			x: xAxis,
-			y: yAxes,
-			color: colorBy,
-			groupBy
+			x: isPie ? (xAxis ?? null) : isHist ? (xAxis ?? null) : xAxis,
+			y: isPie ? (pieValue ? [pieValue] : []) : isHist ? [] : yAxes,
+			color: null
 		},
 		size: {
 			width: typeof width === 'number' && width > 0 ? width : undefined,
 			height: typeof height === 'number' && height > 0 ? height : undefined
 		},
-		options: {}
+		options: {
+			axisLabels: {
+				x: xLabel || undefined,
+				y: yLabel || undefined
+			},
+			axis: {
+				xTickRotate,
+				yTickRotate
+			},
+			palette,
+			line: {
+				curve: lineCurve,
+				strokeWidth: lineStrokeWidth
+			},
+			scatter: {
+				radius: pointRadius
+			},
+			bar: {
+				orientation: barOrientation,
+				padding: barPadding,
+				innerPadding: barInnerPadding
+			},
+			pie: {
+				innerRatio: pieInnerRatio,
+				padAngle: piePadAngle
+			},
+			histogram: {
+				bins: histBins
+			},
+			colors: {
+				series: seriesColors
+			}
+		} as Record<string, unknown>
 	});
 
 	const renderWidth = $derived<number>(spec.size?.width ?? 800);
@@ -53,82 +165,247 @@
 <div class="layout">
 	<aside class="controls card">
 		<h3>Easy mode</h3>
-		<div class="row">
-			<label for="chart-type">Type</label>
-			<select id="chart-type" bind:value={chartType}>
-				<option value="line">Line</option>
-				<option value="bar">Bar</option>
-				<option value="scatter">Scatter</option>
-				<option value="pie">Pie</option>
-				<option value="area">Area</option>
-				<option value="histogram">Histogram</option>
-			</select>
-		</div>
 
-		<div class="row">
-			<label for="title">Title</label>
-			<input id="title" bind:value={title} placeholder="Optional" />
-		</div>
-
-		<div class="row">
-			<label for="size-w">Size</label>
-			<div class="size">
-				<input
-					id="size-w"
-					type="number"
-					min="100"
-					step="10"
-					bind:value={width}
-					placeholder="Width"
-				/>
-				<span>×</span>
-				<input type="number" min="100" step="10" bind:value={height} placeholder="Height" />
+		<section class="group">
+			<h4>Chart</h4>
+			<div class="row">
+				<label for="chart-type">Type</label>
+				<select id="chart-type" bind:value={chartType}>
+					<option value="line">Line</option>
+					<option value="bar">Bar</option>
+					<option value="scatter">Scatter</option>
+					<option value="pie">Pie</option>
+					<option value="histogram">Histogram</option>
+				</select>
 			</div>
-		</div>
-
-		<label class="inline">
-			<input type="checkbox" bind:checked={showLegend} />
-			Show legend
-		</label>
+		</section>
 
 		<hr />
 
-		<h4>Data mapping</h4>
-		<div class="row">
-			<label for="x-axis">X axis</label>
-			<select id="x-axis" bind:value={xAxis}>
-				<option value={null as any} disabled selected>Select column</option>
-				{#each headers as h}<option value={h}>{h}</option>{/each}
-			</select>
-		</div>
+		<section class="group">
+			<h4>Data mapping</h4>
+			{#if isPie}
+				<div class="row">
+					<label for="pie-cat">Category</label>
+					<select id="pie-cat" bind:value={xAxis}>
+						<option value={null as any} disabled selected>Select column</option>
+						{#each headers as h}<option value={h}>{h}</option>{/each}
+					</select>
+				</div>
+				<div class="row">
+					<label for="pie-val">Value</label>
+					<select id="pie-val" bind:value={pieValue}>
+						<option value={null as any} disabled selected>Select numeric column</option>
+						{#each headers as h}<option value={h}>{h}</option>{/each}
+					</select>
+				</div>
+			{:else if isHist}
+				<div class="row">
+					<label for="hist-field">Field</label>
+					<select id="hist-field" bind:value={xAxis}>
+						<option value={null as any} disabled selected>Select numeric column</option>
+						{#each headers as h}<option value={h}>{h}</option>{/each}
+					</select>
+				</div>
+			{:else}
+				<div class="row">
+					<label for="x-axis">X axis</label>
+					<select id="x-axis" bind:value={xAxis}>
+						<option value={null as any} disabled selected>Select column</option>
+						{#each headers as h}<option value={h}>{h}</option>{/each}
+					</select>
+				</div>
 
-		<div class="row">
-			<label>Y axis</label>
-			<div class="cols">
-				{#each headers as h}
-					<label class="chk">
-						<input type="checkbox" checked={yAxes.includes(h)} onchange={() => toggleY(h)} />
-						<span>{h}</span>
-					</label>
-				{/each}
+				<div class="row">
+					<label for="y-axis">Y axis</label>
+					<div class="cols" id="y-axis">
+						{#each headers as h}
+							<label class="chk">
+								<input type="checkbox" checked={yAxes.includes(h)} onchange={() => toggleY(h)} />
+								<span>{h}</span>
+							</label>
+						{/each}
+					</div>
+				</div>
+			{/if}
+		</section>
+
+		<hr />
+
+		<section class="group">
+			<h4>Appearance</h4>
+
+			<div class="row">
+				<label for="title">Title</label>
+				<input id="title" bind:value={title} placeholder="Chart title" />
 			</div>
-		</div>
 
-		<div class="row">
-			<label for="color-by">Color by</label>
-			<select id="color-by" bind:value={colorBy}>
-				<option value={null as any} selected>None</option>
-				{#each headers as h}<option value={h}>{h}</option>{/each}
-			</select>
-		</div>
+			<div class="row">
+				<label for="size-w">Size</label>
+				<div class="size">
+					<input
+						id="size-w"
+						type="number"
+						min="200"
+						step="20"
+						bind:value={width}
+						placeholder="Width"
+					/>
+					<span>×</span>
+					<input type="number" min="150" step="20" bind:value={height} placeholder="Height" />
+				</div>
+			</div>
 
-		<div class="row">
-			<label for="group-by">Group by</label>
-			<select id="group-by" bind:value={groupBy}>
-				<option value={null as any} selected>None</option>
-				{#each headers as h}<option value={h}>{h}</option>{/each}
-			</select>
-		</div>
+			<div class="row">
+				<label for="x-label">X label</label>
+				<input id="x-label" bind:value={xLabel} placeholder="Optional" />
+			</div>
+			<div class="row">
+				<label for="y-label">Y label</label>
+				<input id="y-label" bind:value={yLabel} placeholder="Optional" />
+			</div>
+
+			<div class="row">
+				<label for="legend-toggle">Legend</label>
+				<input id="legend-toggle" type="checkbox" bind:checked={showLegend} />
+			</div>
+
+			<div class="row">
+				<label for="palette-label">Palette</label>
+				<div class="palette" aria-labelledby="palette-label" id="palette-label">
+					{#each palette ?? [] as col, i}
+						<label class="swatch">
+							<input
+								type="color"
+								value={col}
+								oninput={(e: any) => updatePaletteColor(i, e.target.value)}
+								aria-label={`Palette color ${i + 1}`}
+							/>
+							<span style={`--c:${col}`}></span>
+						</label>
+					{/each}
+					<button class="secondary small" type="button" onclick={addPaletteColor}>+ Add</button>
+				</div>
+			</div>
+
+			<div class="row">
+				<label for="xrot">X tick rotate</label>
+				<select id="xrot" bind:value={xTickRotate}>
+					<option value={0}>0</option>
+					<option value={45}>45</option>
+					<option value={90}>90</option>
+				</select>
+			</div>
+			<div class="row">
+				<label for="yrot">Y tick rotate</label>
+				<select id="yrot" bind:value={yTickRotate}>
+					<option value={0}>0</option>
+					<option value={45}>45</option>
+					<option value={90}>90</option>
+				</select>
+			</div>
+		</section>
+
+		{#if !isPie && !isHist}
+			<hr />
+			<section class="group">
+				<h4>Series colors</h4>
+				{#if yAxes.length === 0}
+					<p class="hint">Choose at least one Y axis to customize colors.</p>
+				{:else}
+					{#each yAxes as key, i}
+						<div class="row">
+							<label for={`series-${i}-hex`}>{key}</label>
+							<input
+								id={`series-${i}-color`}
+								type="color"
+								bind:value={seriesColors[key]}
+								aria-labelledby={`series-${i}-hex`}
+							/>
+							<input id={`series-${i}-hex`} class="hex" bind:value={seriesColors[key]} />
+						</div>
+					{/each}
+				{/if}
+			</section>
+		{/if}
+
+		{#if chartType === 'line'}
+			<hr />
+			<section class="group">
+				<h4>Line</h4>
+				<div class="row">
+					<label for="curve">Curve</label>
+					<select id="curve" bind:value={lineCurve}>
+						<option value="linear">Linear</option>
+						<option value="monotone">Monotone</option>
+						<option value="step">Step</option>
+						<option value="natural">Natural</option>
+					</select>
+				</div>
+				<div class="row">
+					<label for="lw">Stroke</label>
+					<input id="lw" type="number" min="1" max="8" step="0.5" bind:value={lineStrokeWidth} />
+				</div>
+			</section>
+		{:else if chartType === 'scatter'}
+			<hr />
+			<section class="group">
+				<h4>Scatter</h4>
+				<div class="row">
+					<label for="pr">Point size</label>
+					<input id="pr" type="number" min="1" max="12" step="0.5" bind:value={pointRadius} />
+				</div>
+			</section>
+		{:else if chartType === 'bar'}
+			<hr />
+			<section class="group">
+				<h4>Bar</h4>
+				<div class="row">
+					<label for="orient">Orientation</label>
+					<select id="orient" bind:value={barOrientation}>
+						<option value="vertical">Vertical</option>
+						<option value="horizontal">Horizontal</option>
+					</select>
+				</div>
+				<div class="row">
+					<label for="bp">Outer padding</label>
+					<input id="bp" type="number" min="0" max="0.5" step="0.05" bind:value={barPadding} />
+				</div>
+				<div class="row">
+					<label for="bip">Inner padding</label>
+					<input
+						id="bip"
+						type="number"
+						min="0"
+						max="0.5"
+						step="0.05"
+						bind:value={barInnerPadding}
+					/>
+				</div>
+			</section>
+		{:else if chartType === 'pie'}
+			<hr />
+			<section class="group">
+				<h4>Pie</h4>
+				<div class="row">
+					<label for="ir">Inner ratio</label>
+					<input id="ir" type="number" min="0" max="0.9" step="0.05" bind:value={pieInnerRatio} />
+				</div>
+				<div class="row">
+					<label for="pa">Pad angle</label>
+					<input id="pa" type="number" min="0" max="0.3" step="0.01" bind:value={piePadAngle} />
+				</div>
+			</section>
+		{:else if chartType === 'histogram'}
+			<hr />
+			<section class="group">
+				<h4>Histogram</h4>
+				<div class="row">
+					<label for="bins">Bins</label>
+					<input id="bins" type="number" min="5" max="100" step="1" bind:value={histBins} />
+				</div>
+			</section>
+		{/if}
 	</aside>
 
 	<section class="stage card">
@@ -145,7 +422,7 @@
 		gap: 16px;
 	}
 	.controls {
-		width: 360px;
+		width: 400px;
 		flex: 0 0 auto;
 	}
 	.card {
@@ -155,11 +432,14 @@
 		background: #fff;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 	}
+	.group {
+		display: grid;
+		gap: 8px;
+	}
 	.row {
 		display: flex;
 		gap: 8px;
 		align-items: center;
-		margin: 8px 0;
 	}
 	.row > label {
 		min-width: 110px;
@@ -171,11 +451,27 @@
 		gap: 6px;
 		align-items: center;
 	}
-	.inline {
+	.palette {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.swatch {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		margin-top: 4px;
+	}
+	.swatch > span {
+		width: 20px;
+		height: 20px;
+		border-radius: 4px;
+		border: 1px solid #ddd;
+		background: var(--c);
+		display: inline-block;
+	}
+	input.hex {
+		width: 110px;
 	}
 	.cols {
 		display: grid;
@@ -187,11 +483,6 @@
 		border-radius: 10px;
 		padding: 8px;
 		background: #fafafa;
-	}
-	.chk {
-		display: flex;
-		gap: 6px;
-		align-items: center;
 	}
 	.chart-area {
 		border: 1px dashed #cfd6e4;
