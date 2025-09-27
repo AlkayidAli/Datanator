@@ -18,6 +18,7 @@
 	} from '$lib/utils/datalab/transform';
 	import type { RowAggOp } from '$lib/utils/datalab/transform';
 	import { downloadCSVFromParsed } from '$lib/utils/csv/export'; // NEW
+	import { goto } from '$app/navigation';
 
 	// Working pipeline
 	let transforms = $state<Transform[]>([]);
@@ -834,6 +835,10 @@
 					<button class="secondary" onclick={exportCSV} title="Export CSV" disabled={!tableData}>
 						<span class="material-symbols-outlined">file_download</span>
 						Export
+					</button>
+					<button class="secondary" onclick={() => goto('/visualize')} title="Open Visualization">
+						<span class="material-symbols-outlined">insert_chart</span>
+						Visualize
 					</button>
 					{#if preview && !editMode}
 						<small class="muted">Editing disabled while preview is active</small>
