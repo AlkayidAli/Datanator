@@ -2,6 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import D3Chart from './D3Chart.svelte';
 	import type { ChartSpec } from '$lib/types/visualization';
+	import { onMount, onDestroy } from 'svelte';
 
 	const dispatch = createEventDispatcher<{ specChange: { spec: ChartSpec } }>();
 
@@ -55,6 +56,10 @@
 	// Series color overrides
 	let seriesColors = $state<Record<string, string>>({});
 
+	// Color mode
+	let colorMode = $state<'series' | 'point'>('series'); // coloring strategy
+	const supportsPointMode = $derived(chartType === 'scatter');
+
 	function toggleY(h: string) {
 		yAxes = yAxes.includes(h) ? yAxes.filter((c) => c !== h) : [...yAxes, h];
 	}
@@ -90,26 +95,51 @@
 		paletteText = arr.join(', ');
 	}
 
-	// Keep seriesColors keys in sync with current Y series
+	// Remove auto seeding, only prune removed keys
 	$effect(() => {
 		if (isPie || isHist) return;
-		for (const k of yAxes) {
-			if (!seriesColors[k]) {
-				// seed with something visible; fallback colors if no palette yet
-				const seed = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'];
-				seriesColors[k] = seed[yAxes.indexOf(k) % seed.length];
-			}
-		}
-		// prune removed keys
 		for (const k of Object.keys(seriesColors)) {
 			if (!yAxes.includes(k)) delete seriesColors[k];
 		}
 	});
 
+	// Default labels based on current mapping (only if user has not typed anything)
+	$effect(() => {
+		if (!xLabel && xAxis) xLabel = xAxis;
+		if (isPie) {
+			if (!xLabel && xAxis) xLabel = xAxis;
+			if (!yLabel && pieValue) yLabel = pieValue;
+		} else if (isHist) {
+			if (!xLabel && xAxis) xLabel = xAxis;
+			if (!yLabel) yLabel = 'Count';
+		} else {
+			if (!yLabel && yAxes.length > 0) yLabel = yAxes.join(', ');
+		}
+	});
+
+	// Series fallback colors (used when user has not overridden)
+	const defaultFallback = [
+		'#1f77b4',
+		'#ff7f0e',
+		'#2ca02c',
+		'#d62728',
+		'#9467bd',
+		'#8c564b',
+		'#e377c2',
+		'#7f7f7f',
+		'#bcbd22',
+		'#17becf'
+	];
+	function getSeriesFallbackColor(key: string, i: number) {
+		// Prefer palette if provided, else defaultFallback
+		const cols = palette && palette.length ? palette : defaultFallback;
+		return cols[i % cols.length];
+	}
+
 	const spec = $derived<ChartSpec>({
 		mark: chartType,
 		title: title || undefined,
-		legend: showLegend,
+		legend: colorMode === 'point' ? false : showLegend,
 		encoding: {
 			x: isPie ? (xAxis ?? null) : isHist ? (xAxis ?? null) : xAxis,
 			y: isPie ? (pieValue ? [pieValue] : []) : isHist ? [] : yAxes,
@@ -149,12 +179,32 @@
 				bins: histBins
 			},
 			colors: {
-				series: seriesColors
+				series: seriesColors,
+				mode: colorMode
 			}
 		} as Record<string, unknown>
 	});
 
-	const renderWidth = $derived<number>(spec.size?.width ?? 800);
+	let chartAreaEl = $state<HTMLDivElement | null>(null);
+	let autoWidth = $state<number | null>(null);
+
+	let resizeObs: ResizeObserver | null = null;
+	onMount(() => {
+		if (chartAreaEl) {
+			const apply = () => (autoWidth = chartAreaEl!.clientWidth);
+			resizeObs = new ResizeObserver(apply);
+			resizeObs.observe(chartAreaEl);
+			apply();
+		}
+	});
+	onDestroy(() => {
+		if (resizeObs && chartAreaEl) resizeObs.unobserve(chartAreaEl);
+	});
+
+	const renderWidth = $derived<number>(
+		// explicit width from spec if provided, else observed container width, else fallback
+		spec.size?.width ?? autoWidth ?? 800
+	);
 	const renderHeight = $derived<number>(spec.size?.height ?? 500);
 
 	$effect(() => {
@@ -304,9 +354,24 @@
 					<option value={90}>90</option>
 				</select>
 			</div>
+
+			<div class="row">
+				<label for="color-mode">Color mode</label>
+				<select
+					id="color-mode"
+					bind:value={colorMode}
+					disabled={!supportsPointMode}
+					title={supportsPointMode
+						? 'Choose how colors are assigned'
+						: 'Point coloring only available for scatter'}
+				>
+					<option value="series">By series</option>
+					<option value="point">Each point</option>
+				</select>
+			</div>
 		</section>
 
-		{#if !isPie && !isHist}
+		{#if !isPie && !isHist && colorMode === 'series'}
 			<hr />
 			<section class="group">
 				<h4>Series colors</h4>
@@ -319,12 +384,20 @@
 							<input
 								id={`series-${i}-color`}
 								type="color"
-								bind:value={seriesColors[key]}
-								aria-labelledby={`series-${i}-hex`}
+								value={seriesColors[key] ?? getSeriesFallbackColor(key, i)}
+								oninput={(e) => (seriesColors[key] = (e.target as HTMLInputElement).value)}
 							/>
-							<input id={`series-${i}-hex`} class="hex" bind:value={seriesColors[key]} />
+							<input
+								id={`series-${i}-hex`}
+								class="hex"
+								value={seriesColors[key] ?? getSeriesFallbackColor(key, i)}
+								oninput={(e) => (seriesColors[key] = (e.target as HTMLInputElement).value)}
+							/>
 						</div>
 					{/each}
+					<small class="hint"
+						>Palette provides default colors. Changing a color creates an override.</small
+					>
 				{/if}
 			</section>
 		{/if}
@@ -410,7 +483,7 @@
 
 	<section class="stage card">
 		<h3>Chart</h3>
-		<div class="chart-area">
+		<div class="chart-area" bind:this={chartAreaEl}>
 			<D3Chart {spec} {rows} width={renderWidth} height={renderHeight} />
 		</div>
 	</section>
@@ -484,6 +557,12 @@
 		padding: 8px;
 		background: #fafafa;
 	}
+	.stage {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
 	.chart-area {
 		border: 1px dashed #cfd6e4;
 		border-radius: 12px;
@@ -492,6 +571,9 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		width: 100%;
+		padding: 8px;
+		box-sizing: border-box;
 	}
 	select,
 	input {

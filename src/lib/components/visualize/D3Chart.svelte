@@ -159,23 +159,27 @@
 			const xLabel: string | undefined = opts.axisLabels?.x;
 			const yLabel: string | undefined = opts.axisLabels?.y;
 
+			let xTitleSel: any = null;
+			let yTitleSel: any = null;
 			function placeXLabel() {
 				if (!xLabel) return;
-				root
+				xTitleSel = root
 					.append('text')
+					.attr('class', 'axis-title x')
 					.attr('x', iw / 2)
-					.attr('y', ih + 36)
+					.attr('y', ih + 36) // provisional, will adjust later
 					.attr('text-anchor', 'middle')
 					.attr('fill', '#333')
 					.text(xLabel);
 			}
 			function placeYLabel() {
 				if (!yLabel) return;
-				root
+				yTitleSel = root
 					.append('text')
+					.attr('class', 'axis-title y')
 					.attr('transform', 'rotate(-90)')
 					.attr('x', -ih / 2)
-					.attr('y', -44)
+					.attr('y', -44) // provisional, will adjust later
 					.attr('text-anchor', 'middle')
 					.attr('fill', '#333')
 					.text(yLabel);
@@ -214,8 +218,78 @@
 						.attr('dx', '-0.6em');
 			}
 
-			// Legend helper
-			function drawLegend(labels: string[]) {
+			function adjustAxisTitles() {
+				// Adjust X title below tallest tick label
+				if (xTitleSel) {
+					const tickNodes = gx.selectAll<SVGTextElement, unknown>('text').nodes();
+					if (tickNodes.length) {
+						let maxH = 0;
+						for (const n of tickNodes) {
+							const bb = n.getBBox();
+							maxH = Math.max(maxH, bb.height);
+						}
+						xTitleSel.attr('y', ih + maxH + 28);
+					}
+				}
+				// Adjust Y title left of widest tick label
+				if (yTitleSel) {
+					const tickNodes = gy.selectAll<SVGTextElement, unknown>('text').nodes();
+					if (tickNodes.length) {
+						let maxW = 0;
+						for (const n of tickNodes) {
+							const bb = n.getBBox();
+							maxW = Math.max(maxW, bb.width);
+						}
+						// yTitleSel already rotated; its 'y' negative moves left
+						yTitleSel.attr('y', -(maxW + 24));
+					}
+				}
+			}
+
+			// New: prevent overlapping X tick labels (after rotateTicks call)
+			function fixXTicks() {
+				const tickGroups = gx.selectAll<SVGGElement, unknown>('g.tick');
+				if (!tickGroups.size()) return;
+
+				function hasOverlap(nodes: SVGTextElement[]) {
+					for (let i = 1; i < nodes.length; i++) {
+						const a = nodes[i - 1].getBoundingClientRect();
+						const b = nodes[i].getBoundingClientRect();
+						// horizontal overlap (1px tolerance)
+						if (a.right + 1 >= b.left) return true;
+					}
+					return false;
+				}
+
+				let iterations = 0;
+				while (iterations < 6) {
+					const visibleTexts = tickGroups
+						.filter(function () {
+							const disp = (this as SVGGElement).style.display;
+							return disp !== 'none';
+						})
+						.select('text')
+						.nodes() as SVGTextElement[];
+
+					if (visibleTexts.length <= 1 || !hasOverlap(visibleTexts)) break;
+
+					// hide every other tick
+					let keep = true;
+					tickGroups
+						.filter(function () {
+							const disp = (this as SVGGElement).style.display;
+							return disp !== 'none';
+						})
+						.each(function () {
+							if (!keep) (this as SVGGElement).style.display = 'none';
+							keep = !keep;
+						});
+					iterations++;
+				}
+			}
+
+			// Legend helper now takes color function
+			function drawLegend(labels: string[], colorFn: (label: string, i: number) => string) {
 				if (!spec.legend || !labels.length) return;
 				const lg = root.append('g').attr('transform', `translate(${iw - 140}, 0)`);
 				const item = lg
@@ -228,7 +302,7 @@
 					.append('rect')
 					.attr('width', 12)
 					.attr('height', 12)
-					.attr('fill', (_d, i) => palette[i % palette.length])
+					.attr('fill', (d, i) => colorFn(d, i))
 					.attr('rx', 2);
 				item
 					.append('text')
@@ -365,22 +439,75 @@
 				return;
 			}
 
-			// Build scales
+			// Build scales (supports bar orientation)
 			const xVals = (rows as any[]).map((r) => r[enc.x!]);
 			let xType: 'band' | 'number' | 'time';
 			if (xVals.every(isDateish)) xType = 'time';
 			else if (xVals.every(isNum)) xType = 'number';
 			else xType = 'band';
 
+			const seriesKeys: string[] = enc.y!;
+			const paletteScale = scaleOrdinal<string, string>().domain(seriesKeys).range(palette);
+
+			// Prepare domains/helpers used by multiple marks
+			const categoriesDomain = Array.from(new Set(xVals.map((v) => String(v))));
+			// Gather Y values across all selected series
+			const yRawValues: any[] = [];
+			for (const key of seriesKeys) {
+				for (const r of rows as any[]) yRawValues.push((r as any)[key]);
+			}
+			// Decide Y type: numeric or categorical (band)
+			const yType: 'number' | 'band' = yRawValues.every(isNum) ? 'number' : 'band';
+
+			const allYValues: number[] = [];
+			if (yType === 'number') {
+				for (const key of seriesKeys)
+					for (const r of rows as any[]) {
+						const v = toNum(r[key]);
+						if (v != null) allYValues.push(v);
+					}
+			}
+			const yCategoriesDomain: string[] =
+				yType === 'band'
+					? Array.from(
+							new Set(seriesKeys.flatMap((k) => (rows as any[]).map((r) => String((r as any)[k]))))
+						)
+					: [];
+
+			if (
+				yType === 'number' &&
+				!allYValues.length &&
+				spec.mark !== 'pie' &&
+				spec.mark !== 'histogram'
+			) {
+				root
+					.append('text')
+					.attr('x', iw / 2)
+					.attr('y', ih / 2)
+					.attr('text-anchor', 'middle')
+					.text('No numeric data in selected Y columns');
+				return;
+			}
+
+			const barOrient = (opts.bar?.orientation ?? 'vertical') as 'vertical' | 'horizontal';
+			const isBar = spec.mark === 'bar';
+			const isBarH = isBar && barOrient === 'horizontal';
+
+			// X scale
 			let x: any;
-			if (mark === 'bar') {
-				const domain = Array.from(new Set(xVals.map((v) => String(v))));
-				if (!baseXDom) baseXDom = domain.slice();
+			if (isBar && barOrient === 'vertical') {
+				if (!baseXDom) baseXDom = categoriesDomain.slice();
 				x = scaleBand<string>()
-					.domain(xDom?.length ? (xDom as string[]) : domain)
+					.domain(Array.isArray(xDom) && xDom.length ? (xDom as string[]) : categoriesDomain)
 					.range([0, iw])
 					.padding(clamp(Number(opts.bar?.padding ?? 0.2), 0, 0.5));
-				// no .nice() for band
+			} else if (isBar && barOrient === 'horizontal') {
+				const dom: [number, number] = [0, max(allYValues) ?? 0];
+				if (!baseXDom) baseXDom = dom.slice() as any[];
+				x = scaleLinear()
+					.domain(Array.isArray(xDom) && xDom.length ? (xDom as [number, number]) : dom)
+					.range([0, iw]);
+				if (!xDom?.length) x.nice();
 			} else if (xType === 'time') {
 				const dates = xVals.map(toDate) as Date[];
 				const dom = extent(dates) as [Date, Date];
@@ -388,47 +515,57 @@
 				x = scaleUtc()
 					.domain((xDom?.length ? (xDom as Date[]) : dom) as [Date, Date])
 					.range([0, iw]);
-				if (!xDom?.length) x.nice(); // don't nice when zoomed
+				if (!xDom?.length) x.nice();
 			} else if (xType === 'number') {
 				const nums = xVals.map(toNum) as number[];
 				const dom = extent(nums) as [number, number];
 				if (!baseXDom) baseXDom = dom.slice() as any[];
 				x = scaleLinear()
-					.domain((xDom?.length ? (xDom as number[]) : dom) as [number, number])
+					.domain((xDom?.length ? (xDom as [number, number]) : dom) as [number, number])
 					.range([0, iw]);
-				if (!xDom?.length) x.nice(); // don't nice when zoomed
+				if (!xDom?.length) x.nice();
 			} else {
-				const domain = Array.from(new Set(xVals.map((v) => String(v))));
-				if (!baseXDom) baseXDom = domain.slice();
+				if (!baseXDom) baseXDom = categoriesDomain.slice();
 				x = scaleBand<string>()
-					.domain(xDom?.length ? (xDom as string[]) : domain)
+					.domain(xDom?.length ? (xDom as string[]) : categoriesDomain)
 					.range([0, iw])
 					.padding(0.1);
 			}
 
-			const seriesKeys: string[] = enc.y!;
-			const paletteScale = scaleOrdinal<string, string>().domain(seriesKeys).range(palette);
-
-			// Y scale (numeric)
-			const allYValues: number[] = [];
-			for (const key of seriesKeys)
-				for (const r of rows as any[]) {
-					const v = toNum(r[key]);
-					if (v != null) allYValues.push(v);
-				}
-			const yDomDefault: [number, number] = [0, max(allYValues) ?? 0];
-			if (!baseYDom) baseYDom = yDomDefault.slice() as [number, number];
-			const y = scaleLinear()
-				.domain(yDom?.length ? (yDom as [number, number]) : yDomDefault)
-				.range([ih, 0]);
-			if (!yDom?.length) y.nice(); // don't nice when zoomed
+			// Y scale
+			let y: any;
+			if (isBarH) {
+				// Y is band (categories) for horizontal bars (categories come from X field)
+				const yCats = Array.isArray(yDom) && yDom.length ? (yDom as string[]) : categoriesDomain;
+				y = scaleBand<string>()
+					.domain(yCats)
+					.range([0, ih])
+					.padding(clamp(Number(opts.bar?.padding ?? 0.2), 0, 0.5));
+				// keep numeric baseYDom for reset when y is continuous in other marks
+			} else if (yType === 'band') {
+				// Categorical Y for line/scatter
+				const yCats = Array.isArray(yDom) && yDom.length ? (yDom as string[]) : yCategoriesDomain;
+				y = scaleBand<string>().domain(yCats).range([0, ih]).padding(0.1);
+			} else {
+				const yDomDefault: [number, number] = [0, max(allYValues) ?? 0];
+				if (!baseYDom) baseYDom = yDomDefault.slice() as [number, number];
+				y = scaleLinear()
+					.domain(Array.isArray(yDom) && yDom.length ? (yDom as [number, number]) : yDomDefault)
+					.range([ih, 0]);
+				if (!yDom?.length) y.nice();
+			}
 
 			// Axes
 			gx.call(hasBand(x) ? axisBottom(x) : axisBottom(x).ticks(6));
-			gy.call(axisLeft(y).ticks(5));
+			gy.call(hasBand(y) ? axisLeft(y) : axisLeft(y).ticks(5));
 			placeXLabel();
 			placeYLabel();
 			rotateTicks();
+			fixXTicks();
+			adjustAxisTitles();
+
+			const colorMode: 'series' | 'point' =
+				(opts.colors?.mode as any) === 'point' ? 'point' : 'series';
 
 			function seriesColor(key: string, i: number) {
 				return seriesOverrides[key] || paletteScale(key) || palette[i % palette.length];
@@ -441,8 +578,15 @@
 					return (px ?? 0) + x.bandwidth() / 2;
 				}
 				if (xType === 'time') return x(toDate(v) ?? new Date());
-				if (xType === 'number') return x(toNum(v) ?? 0);
+				if (xType === 'number' || isBarH) return x(toNum(v) ?? 0);
 				return idx;
+			}
+			function yPos(v: any) {
+				if (hasBand(y)) {
+					const py = y(String(v));
+					return (py ?? 0) + y.bandwidth() / 2;
+				}
+				return y(toNum(v) ?? 0);
 			}
 			function inXDomain(v: any) {
 				if (hasBand(x)) return (x.domain() as string[]).includes(String(v));
@@ -452,7 +596,7 @@
 					const [a, b] = x.domain() as [Date, Date];
 					return d >= a && d <= b;
 				}
-				if (xType === 'number') {
+				if (xType === 'number' || isBarH) {
 					const n = toNum(v);
 					if (n == null) return false;
 					const [a, b] = x.domain() as [number, number];
@@ -460,7 +604,9 @@
 				}
 				return true;
 			}
-			function inYDomain(n: number | null) {
+			function inYDomain(v: any) {
+				if (hasBand(y)) return (y.domain() as string[]).includes(String(v));
+				const n = toNum(v);
 				if (n == null) return false;
 				const [a, b] = y.domain() as [number, number];
 				return n >= a && n <= b;
@@ -471,12 +617,24 @@
 				const lw = clamp(Number(opts.line?.strokeWidth ?? 2), 0.5, 8);
 				const curve = curveFrom(opts.line?.curve ?? 'linear');
 				for (const [i, key] of seriesKeys.entries()) {
-					const data = (rows as any[])
-						.map((r, idx) => ({ x: enc.x ? (r as any)[enc.x] : idx, y: toNum((r as any)[key]) }))
-						.filter((d) => inXDomain(d.x) && inYDomain(d.y)) as { x: any; y: number }[];
-					const ln = shapeLine<{ x: any; y: number }>()
+					let data = (rows as any[])
+						.map((r, idx) => ({
+							x: enc.x ? (r as any)[enc.x] : idx,
+							y: yType === 'number' ? (toNum((r as any)[key]) as any) : String((r as any)[key])
+						}))
+						.filter((d) => inXDomain(d.x) && inYDomain(d.y));
+					// sort by X so path draws left->right (prevents “spider web”)
+					if (hasBand(x)) {
+						const order = x.domain() as string[];
+						data.sort((a, b) => order.indexOf(String(a.x)) - order.indexOf(String(b.x)));
+					} else if (xType === 'time') {
+						data.sort((a, b) => +toDate(a.x)! - +toDate(b.x)!);
+					} else {
+						data.sort((a, b) => toNum(a.x)! - toNum(b.x)!);
+					}
+					const ln = shapeLine<any>()
 						.x((d, i) => xPos(d.x, i))
-						.y((d) => y(d.y))
+						.y((d) => yPos(d.y))
 						.curve(curve);
 					gPlot
 						.append('path')
@@ -491,7 +649,7 @@
 						.enter()
 						.append('circle')
 						.attr('cx', (d, i) => xPos(d.x, i))
-						.attr('cy', (d) => y(d.y))
+						.attr('cy', (d) => yPos(d.y))
 						.attr('r', 3)
 						.attr('fill', seriesColor(key, i))
 						.attr('opacity', 0.0)
@@ -501,75 +659,109 @@
 						.on('pointermove', moveTip)
 						.on('pointerleave', hideTip);
 				}
-				drawLegend(seriesKeys);
+				drawLegend(seriesKeys, seriesColor);
 			} else if (mark === 'scatter') {
 				const r = clamp(Number(opts.scatter?.radius ?? 3.5), 1, 12);
+				let globalIndex = 0;
 				for (const [i, key] of seriesKeys.entries()) {
 					const pts = (rows as any[])
 						.map((row, idx) => ({
 							x: enc.x ? (row as any)[enc.x] : idx,
-							y: toNum((row as any)[key])
+							y: yType === 'number' ? (toNum((row as any)[key]) as any) : String((row as any)[key])
 						}))
-						.filter((d) => inXDomain(d.x) && inYDomain(d.y)) as { x: any; y: number }[];
+						.filter((d) => inXDomain(d.x) && inYDomain(d.y));
 					gPlot
 						.append('g')
 						.selectAll('circle')
 						.data(pts)
 						.enter()
 						.append('circle')
-						.attr('cx', (d, i) => xPos(d.x, i))
-						.attr('cy', (d) => y(d.y))
+						.attr('cx', (d, i2) => xPos(d.x, i2))
+						.attr('cy', (d) => yPos(d.y))
 						.attr('r', r)
-						.attr('fill', seriesColor(key, i))
+						.attr('fill', () =>
+							colorMode === 'point' ? palette[globalIndex++ % palette.length] : seriesColor(key, i)
+						)
 						.attr('opacity', 0.85)
 						.on('pointerenter', (ev, d: any) =>
-							showTip(`<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}`, ev)
+							showTip(
+								`<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}` +
+									(colorMode === 'point' ? '' : ''),
+								ev
+							)
 						)
 						.on('pointermove', moveTip)
 						.on('pointerleave', hideTip);
 				}
-				drawLegend(seriesKeys);
+				if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
 			} else if (mark === 'bar') {
-				const band = x as ScaleBand<string>;
-				const categories = band.domain();
-				const innerPad = clamp(Number(opts.bar?.innerPadding ?? 0.05), 0, 0.5);
-				const inner = scaleBand<string>()
-					.domain(seriesKeys)
-					.range([0, band.bandwidth()])
-					.padding(innerPad);
-				for (const cat of categories) {
-					const gcat = gPlot.append('g').attr('transform', `translate(${band(cat) ?? 0},0)`);
-					for (const [i, k] of seriesKeys.entries()) {
-						const r = (rows as any[]).find((row) => String(row[enc.x!]) === cat);
-						const val = r ? (toNum((r as any)[k]) ?? 0) : 0;
-						gcat
-							.append('rect')
-							.attr('x', inner(k) ?? 0)
-							.attr('y', y(val))
-							.attr('width', inner.bandwidth())
-							.attr('height', ih - y(val))
-							.attr('fill', seriesColor(k, i))
-							.on('pointerenter', (ev) => showTip(`<b>${String(cat)}</b><br/>${k}: ${val}`, ev))
-							.on('pointermove', moveTip)
-							.on('pointerleave', hideTip);
+				if (isBarH) {
+					// Horizontal grouped bars
+					const yBand = y as ScaleBand<string>;
+					const categories = yBand.domain();
+					const innerPad = clamp(Number(opts.bar?.innerPadding ?? 0.05), 0, 0.5);
+					const inner = scaleBand<string>()
+						.domain(seriesKeys)
+						.range([0, yBand.bandwidth()])
+						.padding(innerPad);
+					for (const cat of categories) {
+						const gcat = gPlot.append('g').attr('transform', `translate(0,${yBand(cat) ?? 0})`);
+						for (const [i, k] of seriesKeys.entries()) {
+							const r = (rows as any[]).find((row) => String(row[enc.x!]) === cat);
+							const val = r ? toNum((r as any)[k]) : null;
+							if (val == null) continue; // skip non-numeric
+							gcat
+								.append('rect')
+								.attr('y', inner(k) ?? 0)
+								.attr('x', x(0))
+								.attr('height', inner.bandwidth())
+								.attr('width', Math.max(0, x(val) - x(0)))
+								.attr('fill', seriesColor(k, i))
+								.on('pointerenter', (ev) => showTip(`<b>${String(cat)}</b><br/>${k}: ${val}`, ev))
+								.on('pointermove', moveTip)
+								.on('pointerleave', hideTip);
+						}
+					}
+				} else {
+					// Vertical grouped bars (existing behavior, but skip non-numeric)
+					const band = x as ScaleBand<string>;
+					const categories = band.domain();
+					const innerPad = clamp(Number(opts.bar?.innerPadding ?? 0.05), 0, 0.5);
+					const inner = scaleBand<string>()
+						.domain(seriesKeys)
+						.range([0, band.bandwidth()])
+						.padding(innerPad);
+					for (const cat of categories) {
+						const gcat = gPlot.append('g').attr('transform', `translate(${band(cat) ?? 0},0)`);
+						for (const [i, k] of seriesKeys.entries()) {
+							const r = (rows as any[]).find((row) => String(row[enc.x!]) === cat);
+							const val = r ? toNum((r as any)[k]) : null;
+							if (val == null) continue; // skip non-numeric
+							gcat
+								.append('rect')
+								.attr('x', inner(k) ?? 0)
+								.attr('y', y(val))
+								.attr('width', inner.bandwidth())
+								.attr('height', ih - y(val))
+								.attr('fill', seriesColor(k, i))
+								.on('pointerenter', (ev) => showTip(`<b>${String(cat)}</b><br/>${k}: ${val}`, ev))
+								.on('pointermove', moveTip)
+								.on('pointerleave', hideTip);
+						}
 					}
 				}
-				drawLegend(seriesKeys);
+				drawLegend(seriesKeys, seriesColor);
 			}
 
-			// Zoom/brush (for non-pie, non-histogram)
+			// Zoom/brush (supports band on either axis)
 			{
-				// Reset domains are always the original full domains computed once above
-				const resetXDom = baseXDom
-					? baseXDom.slice()
-					: hasBand(x)
-						? (x.domain() as any[]).slice()
-						: (x.domain() as any[]).slice();
-				const resetYDom = baseYDom
-					? (baseYDom.slice() as [number, number])
-					: ((y.domain() as [number, number]).slice() as [number, number]);
+				const resetXDom = baseXDom ? (baseXDom.slice() as any[]) : (x.domain() as any[]).slice();
+				const resetYDom = hasBand(y)
+					? (y.domain() as any[]).slice()
+					: baseYDom
+						? (baseYDom.slice() as any[])
+						: (y.domain() as any[]).slice();
 
-				// Helper: clamp a continuous domain to the base domain
 				function clampContinuousDom(
 					proposed: [any, any],
 					base: [any, any],
@@ -607,7 +799,7 @@
 					.on('end', (ev: any) => {
 						brushing = false;
 						const sel = ev.selection as [[number, number], [number, number]] | null;
-						if (!sel) return; // cleared
+						if (!sel) return;
 						const [[x0, y0], [x1, y1]] = sel;
 
 						let newXDom: any[] | undefined;
@@ -621,54 +813,79 @@
 						} else if (x.invert) {
 							const raw: [any, any] = [x.invert(x0), x.invert(x1)];
 							newXDom = baseXDom
-								? clampContinuousDom(raw, baseXDom as [any, any], xType as 'time' | 'number')
+								? clampContinuousDom(
+										raw,
+										baseXDom as [any, any],
+										xType === 'time' ? 'time' : 'number'
+									)
 								: raw;
 						}
 
-						const yMin = Math.min(y0, y1);
-						const yMax = Math.max(y0, y1);
-						let newYDom: [number, number] = [y.invert(yMax), y.invert(yMin)];
-						if (baseYDom)
-							newYDom = clampContinuousDom(newYDom, baseYDom, 'number') as [number, number];
+						let newYDom: any[] | undefined;
+						if (hasBand(y)) {
+							const cats = (y as ScaleBand<string>).domain();
+							newYDom = cats.filter((c) => {
+								const cpy = (y(c) ?? 0) + y.bandwidth() / 2;
+								return cpy >= y0 && cpy <= y1;
+							});
+							if (newYDom.length < 1) newYDom = undefined;
+						} else {
+							const yMin = Math.min(y0, y1);
+							const yMax = Math.max(y0, y1);
+							let dom: [number, number] = [y.invert(yMax), y.invert(yMin)];
+							if (baseYDom) dom = clampContinuousDom(dom, baseYDom, 'number') as [number, number];
+							newYDom = dom;
+						}
 
 						gBrush.call(br.move as any, null);
 						suppressNextClick = true;
-						draw(newXDom, newYDom);
+						draw(newXDom, newYDom as any);
 					});
 				gBrush.call(br as any);
 
-				// Double-click: reset to original full domains
 				root.on('dblclick', () => {
 					suppressNextClick = true;
-					draw(resetXDom, resetYDom);
+					draw(resetXDom, resetYDom as any);
 				});
 
-				// Single click: zoom in (kept, but clamped to base domains)
 				root.on('click', (ev: MouseEvent) => {
 					if (suppressNextClick) {
 						suppressNextClick = false;
 						return;
 					}
-					if (brushing) return;
-					if (ev.detail !== 1) return;
+					if (brushing || ev.detail !== 1) return;
 
 					const [px, py] = pointer(ev as any, root.node() as any);
 					let newXDom: any[] | undefined;
-					let newYDom: [number, number] | undefined;
+					let newYDom: any[] | undefined;
+					const factor = 2;
 
-					const factor = 2; // zoom-in by 2x
 					if (!hasBand(x) && x.invert) {
 						const cx = x.invert(px);
 						const xd = x.domain();
 						const spanX: any = (+xd[1] as any) - (+xd[0] as any);
 						const half = spanX / (2 * factor);
 						let rawX: [any, any] = [new Date(+cx - +half), new Date(+cx + +half)] as any;
-						if (xType === 'number') rawX = [(+cx - +half) as any, (+cx + +half) as any];
+						if (xType === 'number' || isBarH) rawX = [(+cx - +half) as any, (+cx + +half) as any];
 						newXDom = baseXDom
-							? clampContinuousDom(rawX, baseXDom as [any, any], xType as 'time' | 'number')
+							? clampContinuousDom(
+									rawX,
+									baseXDom as [any, any],
+									xType === 'time' ? 'time' : 'number'
+								)
 							: rawX;
 					}
-					{
+					if (hasBand(y)) {
+						const cats = (y as ScaleBand<string>).domain();
+						const idx = cats.findIndex(
+							(c) => py >= (y(c) ?? -1) && py <= (y(c) ?? -1) + y.bandwidth()
+						);
+						if (idx >= 0) {
+							const half = Math.max(1, Math.floor(cats.length / (2 * factor)));
+							const start = Math.max(0, idx - half);
+							newYDom = cats.slice(start, Math.min(cats.length, start + 2 * half));
+						}
+					} else {
 						const cy = y.invert(py);
 						const yd = y.domain();
 						const spanY = yd[1] - yd[0];
@@ -678,7 +895,7 @@
 							? (clampContinuousDom(rawY, baseYDom, 'number') as [number, number])
 							: rawY;
 					}
-					draw(newXDom, newYDom);
+					draw(newXDom, newYDom as any);
 				});
 			}
 		}
@@ -692,6 +909,29 @@
 </div>
 
 <style>
+	.chart-wrap {
+		position: relative;
+		width: 100%;
+	}
+	svg {
+		display: block;
+		width: 100%;
+		height: auto;
+		overflow: visible;
+	}
+	.tooltip {
+		position: absolute;
+		display: none;
+		pointer-events: none;
+		background: rgba(30, 41, 59, 0.95);
+		color: #fff;
+		font-size: 12px;
+		padding: 6px 8px;
+		border-radius: 6px;
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+		max-width: 260px;
+	}
+
 	.chart-wrap {
 		position: relative;
 		width: 100%;
