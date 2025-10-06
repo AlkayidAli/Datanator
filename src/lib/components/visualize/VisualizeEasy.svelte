@@ -55,10 +55,17 @@
 
 	// Series color overrides
 	let seriesColors = $state<Record<string, string>>({});
+	// Per-datum overrides (id -> color) applied by clicking chart items
+	let pointOverrides = $state<Record<string, string>>({});
+	// Active palette color to apply on click
+	let activePaletteColor = $state<string | null>(null);
 
 	// Color mode
-	let colorMode = $state<'series' | 'point'>('series'); // coloring strategy
-	const supportsPointMode = $derived(chartType === 'scatter');
+	let colorMode = $state<'series' | 'point'>('series');
+	const supportsPointMode = $derived(chartType === 'scatter' || chartType === 'bar');
+
+	// Interaction mode: zoom / pan / none
+	let interactionMode = $state<'zoom' | 'pan' | 'none'>('zoom');
 
 	function toggleY(h: string) {
 		yAxes = yAxes.includes(h) ? yAxes.filter((c) => c !== h) : [...yAxes, h];
@@ -136,6 +143,29 @@
 		return cols[i % cols.length];
 	}
 
+	// Update supportsPointMode usage (previously only scatter). No further logic needed.
+
+	function selectPaletteColor(col: string) {
+		activePaletteColor = activePaletteColor === col ? null : col;
+	}
+
+	function clearPointOverrides() {
+		pointOverrides = {};
+	}
+
+	// Handle item clicks from chart to assign / toggle override
+	function handleItemClick(e: CustomEvent<{ id: string }>) {
+		const { id } = e.detail;
+		if (!activePaletteColor) return;
+		if (pointOverrides[id] === activePaletteColor) {
+			delete pointOverrides[id];
+		} else {
+			pointOverrides[id] = activePaletteColor;
+		}
+		// force reactivity
+		pointOverrides = { ...pointOverrides };
+	}
+
 	const spec = $derived<ChartSpec>({
 		mark: chartType,
 		title: title || undefined,
@@ -180,7 +210,8 @@
 			},
 			colors: {
 				series: seriesColors,
-				mode: colorMode
+				mode: colorMode,
+				pointOverrides
 			}
 		} as Record<string, unknown>
 	});
@@ -324,19 +355,55 @@
 				<label for="palette-label">Palette</label>
 				<div class="palette" aria-labelledby="palette-label" id="palette-label">
 					{#each palette ?? [] as col, i}
-						<label class="swatch">
+						<label class="swatch {activePaletteColor === col ? 'active' : ''}">
 							<input
 								type="color"
 								value={col}
 								oninput={(e: any) => updatePaletteColor(i, e.target.value)}
-								aria-label={`Palette color ${i + 1}`}
+								aria-label={`Edit palette color ${i + 1}`}
+								onclick={(e) => {
+									e.stopPropagation();
+									selectPaletteColor(col);
+								}}
 							/>
-							<span style={`--c:${col}`}></span>
+							<button
+								type="button"
+								class="swatch-btn"
+								style={`--c:${col}`}
+								aria-label={`Select palette color ${i + 1}`}
+								aria-pressed={activePaletteColor === col}
+								onclick={() => selectPaletteColor(col)}
+							></button>
 						</label>
 					{/each}
 					<button class="secondary small" type="button" onclick={addPaletteColor}>+ Add</button>
 				</div>
 			</div>
+			{#if colorMode === 'point' || interactionMode === 'none'}
+				<div class="row">
+					<div class="fake-label" aria-hidden="true"></div>
+					<small class="hint">
+						{#if activePaletteColor}
+							Selected {activePaletteColor}. Click a {chartType === 'bar' ? 'bar' : 'point'} to apply.
+						{:else}
+							Select a palette color, then click {chartType === 'bar' ? 'bars' : 'points'} to color them.
+						{/if}
+						{#if interactionMode === 'none' && colorMode !== 'point'}
+							<span style="color:#444;">
+								(Mouse mode: per-item coloring allowed even in series mode)</span
+							>
+						{/if}
+					</small>
+				</div>
+				{#if Object.keys(pointOverrides).length}
+					<div class="row">
+						<div class="fake-label" aria-hidden="true"></div>
+						<button class="secondary small" type="button" onclick={clearPointOverrides}
+							>Clear point overrides ({Object.keys(pointOverrides).length})</button
+						>
+					</div>
+				{/if}
+			{/if}
 
 			<div class="row">
 				<label for="xrot">X tick rotate</label>
@@ -363,7 +430,7 @@
 					disabled={!supportsPointMode}
 					title={supportsPointMode
 						? 'Choose how colors are assigned'
-						: 'Point coloring only available for scatter'}
+						: 'Point coloring available for scatter or bar'}
 				>
 					<option value="series">By series</option>
 					<option value="point">Each point</option>
@@ -483,8 +550,47 @@
 
 	<section class="stage card">
 		<h3>Chart</h3>
+
+		<!-- Interaction mode toggle -->
+		<div class="interaction-toggle" role="group" aria-label="Interaction mode">
+			<button
+				type="button"
+				class:active={interactionMode === 'zoom'}
+				title="Zoom: drag to select area, click to zoom in, double‑click to reset"
+				aria-pressed={interactionMode === 'zoom'}
+				onclick={() => (interactionMode = 'zoom')}
+			>
+				<span class="material-symbols-outlined">zoom_in</span>
+			</button>
+			<button
+				type="button"
+				class:active={interactionMode === 'pan'}
+				title="Pan: drag to move the current zoomed view (keeps current zoom)"
+				aria-pressed={interactionMode === 'pan'}
+				onclick={() => (interactionMode = 'pan')}
+			>
+				<span class="material-symbols-outlined">pan_tool</span>
+			</button>
+			<button
+				type="button"
+				class:active={interactionMode === 'none'}
+				title="Mouse: no zoom/pan, use clicks for color overrides"
+				aria-pressed={interactionMode === 'none'}
+				onclick={() => (interactionMode = 'none')}
+			>
+				<span class="material-symbols-outlined">mouse</span>
+			</button>
+		</div>
+
 		<div class="chart-area" bind:this={chartAreaEl}>
-			<D3Chart {spec} {rows} width={renderWidth} height={renderHeight} />
+			<D3Chart
+				{spec}
+				{rows}
+				width={renderWidth}
+				height={renderHeight}
+				{interactionMode}
+				on:itemClick={handleItemClick}
+			/>
 		</div>
 	</section>
 </div>
@@ -531,9 +637,35 @@
 		flex-wrap: wrap;
 	}
 	.swatch {
+		position: relative;
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
+	}
+	.swatch-btn {
+		width: 24px;
+		height: 24px;
+		border: 1px solid #ccc;
+		border-radius: 6px;
+		background: var(--c);
+		cursor: pointer;
+		padding: 0;
+	}
+	.swatch-btn:focus {
+		outline: 2px solid #4a90e2;
+		outline-offset: 2px;
+	}
+	.swatch.active .swatch-btn {
+		outline: 2px solid #4a90e2;
+		outline-offset: 2px;
+	}
+	.hint {
+		color: #666;
+		font-size: 12px;
+	}
+	button.small {
+		font-size: 12px;
+		padding: 4px 8px;
 	}
 	.swatch > span {
 		width: 20px;
@@ -587,5 +719,43 @@
 	input:focus {
 		border-color: #4a90e2;
 		outline: none;
+	}
+	.fake-label {
+		width: 110px;
+		min-width: 110px;
+	}
+	.interaction-toggle {
+		display: inline-flex;
+		gap: 6px;
+		margin: 0 0 8px;
+		border: 1px solid #e2e2e2;
+		padding: 4px 6px;
+		border-radius: 10px;
+		background: #fff;
+	}
+	.interaction-toggle > button {
+		border: none;
+		background: transparent;
+		cursor: pointer;
+		padding: 4px 6px;
+		border-radius: 8px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		color: #333;
+	}
+	.interaction-toggle > button.active {
+		background: #eef3ff;
+		color: #123;
+		font-weight: 600;
+	}
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
 	}
 </style>

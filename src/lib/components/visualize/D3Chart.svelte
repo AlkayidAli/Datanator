@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createEventDispatcher } from 'svelte';
 	import { select, pointer } from 'd3-selection';
 	import { scaleLinear, scaleBand, scaleUtc, scaleOrdinal, type ScaleBand } from 'd3-scale';
 	import { axisBottom, axisLeft } from 'd3-axis';
@@ -21,12 +22,14 @@
 		spec,
 		rows,
 		width = 800,
-		height = 500
+		height = 500,
+		interactionMode = 'zoom'
 	} = $props<{
 		spec: ChartSpec;
 		rows: Record<string, unknown>[];
 		width?: number;
 		height?: number;
+		interactionMode?: 'zoom' | 'pan' | 'none';
 	}>();
 
 	let svgEl = $state<SVGSVGElement | null>(null);
@@ -36,6 +39,10 @@
 	// Keep the original (full) domains for double‑click reset
 	let baseXDom: any[] | null = null;
 	let baseYDom: [number, number] | null = null;
+
+	// Persist current zoomed (filtered) domains across redraws & mode switches
+	let curXDomOverride: any[] | [number, number] | null = null;
+	let curYDomOverride: any[] | [number, number] | null = null;
 
 	function isNum(v: unknown) {
 		return typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && !isNaN(+v));
@@ -94,17 +101,56 @@
 		return n >= 90 ? 90 : n >= 45 ? 45 : 0;
 	}
 
+	const dispatch = createEventDispatcher<{
+		itemClick: { id: string; series: string; x: any; y: any };
+	}>();
+
+	// Track prior spec/size/rows to decide when to truly reset
+	let prevSpecKey: string | null = null;
+	let prevRowsLen = -1;
+	let prevW = -1;
+	let prevH = -1;
+	let prevInteractionMode: string | null = null;
+
 	$effect(() => {
 		if (!svgEl) return;
 
-		// Reset base domains whenever spec/rows/size change and we redraw
-		baseXDom = null;
-		baseYDom = null;
+		// Key (exclude options shallowly to reduce resets)
+		const specKey = JSON.stringify({
+			mark: spec.mark,
+			enc: spec.encoding,
+			size: spec.size,
+			title: spec.title,
+			legend: spec.legend
+		});
+		const rowsLen = rows.length;
+
+		const structuralChanged =
+			specKey !== prevSpecKey || rowsLen !== prevRowsLen || width !== prevW || height !== prevH;
+
+		// Only reset base domains (full reference) when structural changes occur
+		if (structuralChanged) {
+			baseXDom = null;
+			baseYDom = null;
+			// If structure changed, also clear current zoom overrides (they may be invalid)
+			curXDomOverride = null;
+			curYDomOverride = null;
+		}
+		// Interaction mode change alone should NOT clear overrides or base domains
+		prevSpecKey = specKey;
+		prevRowsLen = rowsLen;
+		prevW = width;
+		prevH = height;
+		prevInteractionMode = interactionMode;
 
 		const svg = select(svgEl);
-		function draw(xDom?: any[], yDom?: any[]) {
-			svg.selectAll('*').remove();
 
+		function draw(xDom?: any[], yDom?: any[]) {
+			// Update overrides if new domains explicitly provided
+			if (Array.isArray(xDom)) curXDomOverride = xDom;
+			if (Array.isArray(yDom)) curYDomOverride = yDom;
+
+			svg.selectAll('*').remove();
 			const opts = (spec.options ?? {}) as any;
 
 			// rotations and margins
@@ -497,62 +543,58 @@
 			let x: any;
 			if (isBar && barOrient === 'vertical') {
 				if (!baseXDom) baseXDom = categoriesDomain.slice();
+				const useDom = (curXDomOverride as string[]) ?? categoriesDomain;
 				x = scaleBand<string>()
-					.domain(Array.isArray(xDom) && xDom.length ? (xDom as string[]) : categoriesDomain)
+					.domain(useDom)
 					.range([0, iw])
 					.padding(clamp(Number(opts.bar?.padding ?? 0.2), 0, 0.5));
 			} else if (isBar && barOrient === 'horizontal') {
 				const dom: [number, number] = [0, max(allYValues) ?? 0];
 				if (!baseXDom) baseXDom = dom.slice() as any[];
-				x = scaleLinear()
-					.domain(Array.isArray(xDom) && xDom.length ? (xDom as [number, number]) : dom)
-					.range([0, iw]);
-				if (!xDom?.length) x.nice();
+				const useDom = (curXDomOverride as [number, number]) ?? dom;
+				x = scaleLinear().domain(useDom).range([0, iw]);
+				if (!curXDomOverride) x.nice();
 			} else if (xType === 'time') {
 				const dates = xVals.map(toDate) as Date[];
 				const dom = extent(dates) as [Date, Date];
 				if (!baseXDom) baseXDom = dom.slice() as any[];
-				x = scaleUtc()
-					.domain((xDom?.length ? (xDom as Date[]) : dom) as [Date, Date])
-					.range([0, iw]);
-				if (!xDom?.length) x.nice();
+				const useDom = (curXDomOverride as [Date, Date]) ?? dom;
+				x = scaleUtc().domain(useDom).range([0, iw]);
+				if (!curXDomOverride) x.nice();
 			} else if (xType === 'number') {
 				const nums = xVals.map(toNum) as number[];
 				const dom = extent(nums) as [number, number];
 				if (!baseXDom) baseXDom = dom.slice() as any[];
-				x = scaleLinear()
-					.domain((xDom?.length ? (xDom as [number, number]) : dom) as [number, number])
-					.range([0, iw]);
-				if (!xDom?.length) x.nice();
+				const useDom = (curXDomOverride as [number, number]) ?? dom;
+				x = scaleLinear().domain(useDom).range([0, iw]);
+				if (!curXDomOverride) x.nice();
 			} else {
 				if (!baseXDom) baseXDom = categoriesDomain.slice();
-				x = scaleBand<string>()
-					.domain(xDom?.length ? (xDom as string[]) : categoriesDomain)
-					.range([0, iw])
-					.padding(0.1);
+				const useDom = (curXDomOverride as string[]) ?? categoriesDomain;
+				x = scaleBand<string>().domain(useDom).range([0, iw]).padding(0.1);
 			}
 
-			// Y scale
+			// Y scale (only apply override for continuous; categorical override for bands)
 			let y: any;
 			if (isBarH) {
-				// Y is band (categories) for horizontal bars (categories come from X field)
-				const yCats = Array.isArray(yDom) && yDom.length ? (yDom as string[]) : categoriesDomain;
+				const yCats =
+					(curYDomOverride as string[]) ??
+					(Array.isArray(yDom) && yDom.length ? (yDom as string[]) : categoriesDomain);
 				y = scaleBand<string>()
 					.domain(yCats)
 					.range([0, ih])
 					.padding(clamp(Number(opts.bar?.padding ?? 0.2), 0, 0.5));
-				// keep numeric baseYDom for reset when y is continuous in other marks
 			} else if (yType === 'band') {
-				// Categorical Y for line/scatter
-				const yCats = Array.isArray(yDom) && yDom.length ? (yDom as string[]) : yCategoriesDomain;
+				const yCats =
+					(curYDomOverride as string[]) ??
+					(Array.isArray(yDom) && yDom.length ? (yDom as string[]) : yCategoriesDomain);
 				y = scaleBand<string>().domain(yCats).range([0, ih]).padding(0.1);
 			} else {
 				const yDomDefault: [number, number] = [0, max(allYValues) ?? 0];
 				if (!baseYDom) baseYDom = yDomDefault.slice() as [number, number];
-				y = scaleLinear()
-					.domain(Array.isArray(yDom) && yDom.length ? (yDom as [number, number]) : yDomDefault)
-					.range([ih, 0]);
-				if (!yDom?.length) y.nice();
+				const useYDom = (curYDomOverride as [number, number]) ?? yDomDefault;
+				y = scaleLinear().domain(useYDom).range([ih, 0]);
+				if (!curYDomOverride) y.nice();
 			}
 
 			// Axes
@@ -564,14 +606,41 @@
 			fixXTicks();
 			adjustAxisTitles();
 
+			const pointOverrides: Record<string, string> =
+				(opts.colors?.pointOverrides as Record<string, string>) || {};
+
+			function makeId(seriesKey: string, xVal: any) {
+				return `s:${seriesKey}|x:${String(xVal)}`;
+			}
+
 			const colorMode: 'series' | 'point' =
 				(opts.colors?.mode as any) === 'point' ? 'point' : 'series';
+
+			// Allow coloring if explicit point mode OR interaction mouse mode (none)
+			const canColorIndividually = colorMode === 'point' || interactionMode === 'none';
 
 			function seriesColor(key: string, i: number) {
 				return seriesOverrides[key] || paletteScale(key) || palette[i % palette.length];
 			}
 
-			// Helpers
+			function finalPointColor(
+				seriesKey: string,
+				idxInSeries: number,
+				globalIdx: number,
+				xVal: any
+			) {
+				const id = makeId(seriesKey, xVal);
+				if (pointOverrides[id]) return pointOverrides[id];
+				if (colorMode === 'point') return palette[globalIdx % palette.length];
+				return seriesColor(seriesKey, idxInSeries);
+			}
+
+			function applyOverrideStroke(sel: any, seriesKey: string, xVal: any) {
+				const id = makeId(seriesKey, xVal);
+				if (pointOverrides[id]) sel.attr('stroke', '#222').attr('stroke-width', 1.5);
+			}
+
+			// Added: helper functions required by marks (were lost in refactor)
 			function xPos(v: any, idx: number) {
 				if (hasBand(x)) {
 					const px = x(String(v));
@@ -657,7 +726,10 @@
 							showTip(`<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}`, ev)
 						)
 						.on('pointermove', moveTip)
-						.on('pointerleave', hideTip);
+						.on('pointerleave', hideTip)
+						.each(function (d) {
+							applyOverrideStroke(select(this), key, d.x);
+						});
 				}
 				drawLegend(seriesKeys, seriesColor);
 			} else if (mark === 'scatter') {
@@ -679,22 +751,34 @@
 						.attr('cx', (d, i2) => xPos(d.x, i2))
 						.attr('cy', (d) => yPos(d.y))
 						.attr('r', r)
-						.attr('fill', () =>
-							colorMode === 'point' ? palette[globalIndex++ % palette.length] : seriesColor(key, i)
-						)
+						.attr('fill', (d) => {
+							const c = finalPointColor(key, i, globalIndex, d.x);
+							globalIndex++;
+							return c;
+						})
+						.each(function (d) {
+							applyOverrideStroke(select(this), key, d.x);
+						})
+						.style('cursor', canColorIndividually ? 'pointer' : 'default')
+						.on('click', (_ev, d: any) => {
+							if (!canColorIndividually) return;
+							dispatch('itemClick', {
+								id: makeId(key, d.x),
+								series: key,
+								x: d.x,
+								y: d.y
+							});
+						})
 						.attr('opacity', 0.85)
 						.on('pointerenter', (ev, d: any) =>
-							showTip(
-								`<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}` +
-									(colorMode === 'point' ? '' : ''),
-								ev
-							)
+							showTip(`<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}`, ev)
 						)
 						.on('pointermove', moveTip)
 						.on('pointerleave', hideTip);
 				}
 				if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
 			} else if (mark === 'bar') {
+				let globalBarIndex = 0;
 				if (isBarH) {
 					// Horizontal grouped bars
 					const yBand = y as ScaleBand<string>;
@@ -709,21 +793,37 @@
 						for (const [i, k] of seriesKeys.entries()) {
 							const r = (rows as any[]).find((row) => String(row[enc.x!]) === cat);
 							const val = r ? toNum((r as any)[k]) : null;
-							if (val == null) continue; // skip non-numeric
-							gcat
+							if (val == null) continue;
+							const id = makeId(k, cat);
+							let baseCol: string;
+							if (pointOverrides[id]) baseCol = pointOverrides[id];
+							else if (colorMode === 'point') baseCol = palette[globalBarIndex++ % palette.length];
+							else baseCol = seriesColor(k, i);
+							const rect = gcat
 								.append('rect')
 								.attr('y', inner(k) ?? 0)
 								.attr('x', x(0))
 								.attr('height', inner.bandwidth())
 								.attr('width', Math.max(0, x(val) - x(0)))
-								.attr('fill', seriesColor(k, i))
+								.attr('fill', baseCol)
+								.style('cursor', canColorIndividually ? 'pointer' : 'default')
+								.on('click', () => {
+									if (!canColorIndividually) return;
+									dispatch('itemClick', {
+										id,
+										series: k,
+										x: cat,
+										y: val
+									});
+								})
 								.on('pointerenter', (ev) => showTip(`<b>${String(cat)}</b><br/>${k}: ${val}`, ev))
 								.on('pointermove', moveTip)
 								.on('pointerleave', hideTip);
+							applyOverrideStroke(rect, k, cat);
 						}
 					}
 				} else {
-					// Vertical grouped bars (existing behavior, but skip non-numeric)
+					// Vertical grouped bars
 					const band = x as ScaleBand<string>;
 					const categories = band.domain();
 					const innerPad = clamp(Number(opts.bar?.innerPadding ?? 0.05), 0, 0.5);
@@ -736,170 +836,389 @@
 						for (const [i, k] of seriesKeys.entries()) {
 							const r = (rows as any[]).find((row) => String(row[enc.x!]) === cat);
 							const val = r ? toNum((r as any)[k]) : null;
-							if (val == null) continue; // skip non-numeric
-							gcat
+							if (val == null) continue;
+							const id = makeId(k, cat);
+							let baseCol: string;
+							if (pointOverrides[id]) baseCol = pointOverrides[id];
+							else if (colorMode === 'point') baseCol = palette[globalBarIndex++ % palette.length];
+							else baseCol = seriesColor(k, i);
+							const rect = gcat
 								.append('rect')
 								.attr('x', inner(k) ?? 0)
 								.attr('y', y(val))
 								.attr('width', inner.bandwidth())
 								.attr('height', ih - y(val))
-								.attr('fill', seriesColor(k, i))
+								.attr('fill', baseCol)
+								.style('cursor', canColorIndividually ? 'pointer' : 'default')
+								.on('click', () => {
+									if (!canColorIndividually) return;
+									dispatch('itemClick', {
+										id,
+										series: k,
+										x: cat,
+										y: val
+									});
+								})
 								.on('pointerenter', (ev) => showTip(`<b>${String(cat)}</b><br/>${k}: ${val}`, ev))
 								.on('pointermove', moveTip)
 								.on('pointerleave', hideTip);
+							applyOverrideStroke(rect, k, cat);
 						}
 					}
 				}
-				drawLegend(seriesKeys, seriesColor);
+				if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
 			}
 
-			// Zoom/brush (supports band on either axis)
-			{
-				const resetXDom = baseXDom ? (baseXDom.slice() as any[]) : (x.domain() as any[]).slice();
-				const resetYDom = hasBand(y)
-					? (y.domain() as any[]).slice()
-					: baseYDom
-						? (baseYDom.slice() as any[])
-						: (y.domain() as any[]).slice();
-
-				function clampContinuousDom(
-					proposed: [any, any],
-					base: [any, any],
-					type: 'time' | 'number'
-				): [any, any] {
-					let lo = +proposed[0];
-					let hi = +proposed[1];
-					if (lo > hi) [lo, hi] = [hi, lo];
-					const span = Math.max(hi - lo, 1e-6);
-					const b0 = +base[0];
-					const b1 = +base[1];
-					if (lo < b0) {
-						lo = b0;
-						hi = lo + span;
+			// ===== Interaction modes =====
+			if (interactionMode === 'zoom') {
+				// Zoom/brush (supports band on either axis)
+				{
+					const resetXDom = baseXDom ? (baseXDom.slice() as any[]) : (x.domain() as any[]).slice();
+					const resetYDom = hasBand(y)
+						? (y.domain() as any[]).slice()
+						: baseYDom
+							? (baseYDom.slice() as any[])
+							: (y.domain() as any[]).slice();
+					function clampContinuousDom(
+						proposed: [any, any],
+						base: [any, any],
+						type: 'time' | 'number'
+					): [any, any] {
+						let lo = +proposed[0];
+						let hi = +proposed[1];
+						if (lo > hi) [lo, hi] = [hi, lo];
+						const span = Math.max(hi - lo, 1e-6);
+						const b0 = +base[0];
+						const b1 = +base[1];
+						if (lo < b0) {
+							lo = b0;
+							hi = lo + span;
+						}
+						if (hi > b1) {
+							hi = b1;
+							lo = hi - span;
+						}
+						return type === 'time' ? [new Date(lo), new Date(hi)] : [lo, hi];
 					}
-					if (hi > b1) {
-						hi = b1;
-						lo = hi - span;
-					}
-					return type === 'time' ? [new Date(lo), new Date(hi)] : [lo, hi];
-				}
-
-				let brushing = false;
-				let suppressNextClick = false;
-
-				const gBrush = root.append('g').attr('class', 'brush');
-				const br = brush()
-					.extent([
-						[0, 0],
-						[iw, ih]
-					])
-					.on('start', () => {
-						brushing = true;
-					})
-					.on('end', (ev: any) => {
-						brushing = false;
-						const sel = ev.selection as [[number, number], [number, number]] | null;
-						if (!sel) return;
-						const [[x0, y0], [x1, y1]] = sel;
-
+					let brushing = false;
+					let suppressNextClick = false;
+					const gBrush = root.append('g').attr('class', 'brush');
+					const br = brush()
+						.extent([
+							[0, 0],
+							[iw, ih]
+						])
+						.on('start', () => {
+							brushing = true;
+						})
+						.on('end', (ev: any) => {
+							brushing = false;
+							const sel = ev.selection as [[number, number], [number, number]] | null;
+							if (!sel) return;
+							const [[x0, y0], [x1, y1]] = sel;
+							let newXDom: any[] | undefined;
+							if (hasBand(x)) {
+								const cats = (x as ScaleBand<string>).domain();
+								newXDom = cats.filter((c) => {
+									const cpx = (x(c) ?? 0) + x.bandwidth() / 2;
+									return cpx >= x0 && cpx <= x1;
+								});
+								if (newXDom.length < 1) newXDom = undefined;
+							} else if ((x as any).invert) {
+								const raw: [any, any] = [(x as any).invert(x0), (x as any).invert(x1)];
+								newXDom = baseXDom
+									? clampContinuousDom(
+											raw,
+											baseXDom as [any, any],
+											xType === 'time' ? 'time' : 'number'
+										)
+									: raw;
+							}
+							let newYDom: any[] | undefined;
+							if (hasBand(y)) {
+								const cats = (y as ScaleBand<string>).domain();
+								newYDom = cats.filter((c) => {
+									const cpy = (y(c) ?? 0) + y.bandwidth() / 2;
+									return cpy >= y0 && cpy <= y1;
+								});
+								if (newYDom.length < 1) newYDom = undefined;
+							} else {
+								const yMin = Math.min(y0, y1);
+								const yMax = Math.max(y0, y1);
+								let dom: [number, number] = [(y as any).invert(yMax), (y as any).invert(yMin)];
+								if (baseYDom) dom = clampContinuousDom(dom, baseYDom, 'number') as [number, number];
+								newYDom = dom;
+							}
+							gBrush.call(br.move as any, null);
+							suppressNextClick = true;
+							draw(newXDom, newYDom as any);
+						});
+					gBrush.call(br as any);
+					root.on('dblclick', () => {
+						suppressNextClick = true;
+						curXDomOverride = null;
+						curYDomOverride = null;
+						draw(resetXDom, resetYDom as any);
+					});
+					root.on('click', (ev: MouseEvent) => {
+						if (suppressNextClick) {
+							suppressNextClick = false;
+							return;
+						}
+						if (brushing || ev.detail !== 1) return;
+						const [px, py] = pointer(ev as any, root.node() as any);
 						let newXDom: any[] | undefined;
-						if (hasBand(x)) {
-							const cats = (x as ScaleBand<string>).domain();
-							newXDom = cats.filter((c) => {
-								const cpx = (x(c) ?? 0) + x.bandwidth() / 2;
-								return cpx >= x0 && cpx <= x1;
-							});
-							if (newXDom.length < 1) newXDom = undefined;
-						} else if (x.invert) {
-							const raw: [any, any] = [x.invert(x0), x.invert(x1)];
+						let newYDom: any[] | undefined;
+						const factor = 2;
+						if (!hasBand(x) && (x as any).invert) {
+							const cx = (x as any).invert(px);
+							const xd = (x as any).domain();
+							const spanX: any = (+xd[1] as any) - (+xd[0] as any);
+							const half = spanX / (2 * factor);
+							let rawX: [any, any] = [new Date(+cx - +half), new Date(+cx + +half)] as any;
+							if (xType === 'number' || isBarH) rawX = [(+cx - +half) as any, (+cx + +half) as any];
 							newXDom = baseXDom
 								? clampContinuousDom(
-										raw,
+										rawX,
 										baseXDom as [any, any],
 										xType === 'time' ? 'time' : 'number'
 									)
-								: raw;
+								: rawX;
 						}
-
-						let newYDom: any[] | undefined;
 						if (hasBand(y)) {
 							const cats = (y as ScaleBand<string>).domain();
-							newYDom = cats.filter((c) => {
-								const cpy = (y(c) ?? 0) + y.bandwidth() / 2;
-								return cpy >= y0 && cpy <= y1;
-							});
-							if (newYDom.length < 1) newYDom = undefined;
+							const idx = cats.findIndex(
+								(c) => py >= (y(c) ?? -1) && py <= (y(c) ?? -1) + y.bandwidth()
+							);
+							if (idx >= 0) {
+								const half = Math.max(1, Math.floor(cats.length / (2 * factor)));
+								const start = Math.max(0, idx - half);
+								newYDom = cats.slice(start, Math.min(cats.length, start + 2 * half));
+							}
 						} else {
-							const yMin = Math.min(y0, y1);
-							const yMax = Math.max(y0, y1);
-							let dom: [number, number] = [y.invert(yMax), y.invert(yMin)];
-							if (baseYDom) dom = clampContinuousDom(dom, baseYDom, 'number') as [number, number];
-							newYDom = dom;
+							const cy = (y as any).invert(py);
+							const yd = (y as any).domain();
+							const spanY = yd[1] - yd[0];
+							const halfY = spanY / (2 * factor);
+							let rawY: [number, number] = [cy - halfY, cy + halfY];
+							newYDom = baseYDom
+								? (clampContinuousDom(rawY, baseYDom, 'number') as [number, number])
+								: rawY;
 						}
-
-						gBrush.call(br.move as any, null);
-						suppressNextClick = true;
 						draw(newXDom, newYDom as any);
 					});
-				gBrush.call(br as any);
+				}
+			} else if (interactionMode === 'pan') {
+				// Enhanced smooth pan: horizontal, vertical, diagonal with rAF batching
+				const overlay = root
+					.append('rect')
+					.attr('class', 'pan-overlay')
+					.attr('x', 0)
+					.attr('y', 0)
+					.attr('width', iw)
+					.attr('height', ih)
+					.attr('fill', 'transparent')
+					.style('cursor', 'grab');
 
-				root.on('dblclick', () => {
-					suppressNextClick = true;
-					draw(resetXDom, resetYDom as any);
-				});
+				let panStart: {
+					px: number;
+					py: number;
+					xDomain: any[] | [any, any];
+					yDomain: any[] | [any, any];
+				} | null = null;
 
-				root.on('click', (ev: MouseEvent) => {
-					if (suppressNextClick) {
-						suppressNextClick = false;
-						return;
+				function normalizedDomain(d: any[] | [any, any]) {
+					return Array.isArray(d) ? d : [d[0], d[1]];
+				}
+				function clampContinuous(
+					newLo: number,
+					newHi: number,
+					base: [number | Date, number | Date]
+				): [number, number] {
+					const b0 = +base[0];
+					const b1 = +base[1];
+					const span = newHi - newLo;
+					if (newLo < b0) {
+						newLo = b0;
+						newHi = newLo + span;
 					}
-					if (brushing || ev.detail !== 1) return;
-
-					const [px, py] = pointer(ev as any, root.node() as any);
-					let newXDom: any[] | undefined;
-					let newYDom: any[] | undefined;
-					const factor = 2;
-
-					if (!hasBand(x) && x.invert) {
-						const cx = x.invert(px);
-						const xd = x.domain();
-						const spanX: any = (+xd[1] as any) - (+xd[0] as any);
-						const half = spanX / (2 * factor);
-						let rawX: [any, any] = [new Date(+cx - +half), new Date(+cx + +half)] as any;
-						if (xType === 'number' || isBarH) rawX = [(+cx - +half) as any, (+cx + +half) as any];
-						newXDom = baseXDom
-							? clampContinuousDom(
-									rawX,
-									baseXDom as [any, any],
-									xType === 'time' ? 'time' : 'number'
-								)
-							: rawX;
+					if (newHi > b1) {
+						newHi = b1;
+						newLo = newHi - span;
 					}
-					if (hasBand(y)) {
-						const cats = (y as ScaleBand<string>).domain();
-						const idx = cats.findIndex(
-							(c) => py >= (y(c) ?? -1) && py <= (y(c) ?? -1) + y.bandwidth()
-						);
-						if (idx >= 0) {
-							const half = Math.max(1, Math.floor(cats.length / (2 * factor)));
-							const start = Math.max(0, idx - half);
-							newYDom = cats.slice(start, Math.min(cats.length, start + 2 * half));
+					return [newLo, newHi];
+				}
+
+				function blockSelect(e: Event) {
+					e.preventDefault();
+				}
+
+				// Accumulators for fractional band shifts
+				let accumDx = 0;
+				let accumDy = 0;
+				let panFrame: number | null = null;
+				let latestDx = 0;
+				let latestDy = 0;
+
+				function schedulePanUpdate() {
+					if (panFrame != null) return;
+					panFrame = requestAnimationFrame(() => {
+						panFrame = null;
+						if (!panStart) return;
+
+						let nextX: any[] | [any, any] | null = null;
+						let nextY: any[] | [any, any] | null = null;
+
+						// X axis
+						if (hasBand(x)) {
+							const full = (baseXDom as string[]) ?? (x.domain() as string[]);
+							const visible = panStart.xDomain as string[];
+							if (full.length && visible.length) {
+								const bandW = x.bandwidth() || iw / visible.length;
+								if (bandW > 0) {
+									accumDx += -latestDx;
+									const threshold = bandW * 0.25; // quarter band threshold for smoother steps
+									let shift = 0;
+									while (accumDx >= threshold) {
+										shift++;
+										accumDx -= bandW;
+									}
+									while (accumDx <= -threshold) {
+										shift--;
+										accumDx += bandW;
+									}
+									if (shift !== 0) {
+										const firstIndex = full.indexOf(visible[0]);
+										if (firstIndex !== -1) {
+											let newStart = firstIndex + shift;
+											if (newStart < 0) newStart = 0;
+											if (newStart > full.length - visible.length)
+												newStart = full.length - visible.length;
+											const slice = full.slice(newStart, newStart + visible.length);
+											if (JSON.stringify(slice) !== JSON.stringify(visible)) nextX = slice;
+										}
+									}
+								}
+							}
+						} else if ((x as any).invert) {
+							const orig = normalizedDomain(panStart.xDomain) as [any, any];
+							const spanDomain = +orig[1] - +orig[0];
+							if (spanDomain > 0) {
+								const unitsPerPx = spanDomain / iw;
+								let newLo = +orig[0] - latestDx * unitsPerPx;
+								let newHi = +orig[1] - latestDx * unitsPerPx;
+								if (baseXDom && baseXDom.length === 2)
+									[newLo, newHi] = clampContinuous(newLo, newHi, baseXDom as [any, any]);
+								nextX = xType === 'time' ? [new Date(newLo), new Date(newHi)] : [newLo, newHi];
+							}
 						}
-					} else {
-						const cy = y.invert(py);
-						const yd = y.domain();
-						const spanY = yd[1] - yd[0];
-						const halfY = spanY / (2 * factor);
-						let rawY: [number, number] = [cy - halfY, cy + halfY];
-						newYDom = baseYDom
-							? (clampContinuousDom(rawY, baseYDom, 'number') as [number, number])
-							: rawY;
-					}
-					draw(newXDom, newYDom as any);
+
+						// Y axis
+						if (hasBand(y)) {
+							const full = isBarH
+								? (categoriesDomain as string[])
+								: yType === 'band'
+									? (yCategoriesDomain as string[])
+									: (y.domain() as string[]);
+							const visible = panStart.yDomain as string[];
+							if (full.length && visible.length) {
+								const bandW = y.bandwidth() || ih / visible.length;
+								if (bandW > 0) {
+									accumDy += -latestDy;
+									const threshold = bandW * 0.25;
+									let shift = 0;
+									while (accumDy >= threshold) {
+										shift++;
+										accumDy -= bandW;
+									}
+									while (accumDy <= -threshold) {
+										shift--;
+										accumDy += bandW;
+									}
+									if (shift !== 0) {
+										const firstIndex = full.indexOf(visible[0]);
+										if (firstIndex !== -1) {
+											let newStart = firstIndex + shift;
+											if (newStart < 0) newStart = 0;
+											if (newStart > full.length - visible.length)
+												newStart = full.length - visible.length;
+											const slice = full.slice(newStart, newStart + visible.length);
+											if (JSON.stringify(slice) !== JSON.stringify(visible)) nextY = slice;
+										}
+									}
+								}
+							}
+						} else if ((y as any).invert) {
+							const orig = normalizedDomain(panStart.yDomain) as [any, any];
+							const spanDomain = +orig[1] - +orig[0];
+							if (spanDomain > 0) {
+								const unitsPerPx = spanDomain / ih;
+								let newLo = +orig[0] + latestDy * unitsPerPx; // down drag -> move domain down
+								let newHi = +orig[1] + latestDy * unitsPerPx;
+								if (baseYDom)
+									[newLo, newHi] = clampContinuous(newLo, newHi, baseYDom as [any, any]);
+								nextY = [newLo, newHi];
+							}
+						}
+
+						if (nextX || nextY) {
+							draw(nextX ?? (x.domain() as any[]), nextY ?? (y.domain() as any[]));
+						}
+					});
+				}
+
+				overlay.on('pointerdown', (ev: PointerEvent) => {
+					ev.preventDefault();
+					const [px, py] = pointer(ev as any, overlay.node() as any);
+					panStart = {
+						px,
+						py,
+						xDomain: hasBand(x) ? (x.domain() as any[]) : (x.domain() as [any, any]),
+						yDomain: hasBand(y) ? (y.domain() as any[]) : (y.domain() as [any, any])
+					};
+					accumDx = 0;
+					accumDy = 0;
+					latestDx = 0;
+					latestDy = 0;
+					overlay.style('cursor', 'grabbing');
+					wrapEl?.classList.add('panning');
+					document.documentElement.classList.add('global-noselect');
+					document.addEventListener('selectstart', blockSelect, { capture: true });
+					(window as any).addEventListener('pointermove', onMove, { passive: false });
+					(window as any).addEventListener('pointerup', onUp, { once: true });
+					(ev.target as HTMLElement).setPointerCapture(ev.pointerId);
 				});
+
+				function onMove(ev: PointerEvent) {
+					if (!panStart) return;
+					ev.preventDefault();
+					const [mx, my] = pointer(ev as any, overlay.node() as any);
+					latestDx = mx - panStart.px;
+					latestDy = my - panStart.py;
+					schedulePanUpdate();
+				}
+
+				function onUp() {
+					panStart = null;
+					overlay.style('cursor', 'grab');
+					wrapEl?.classList.remove('panning');
+					document.documentElement.classList.remove('global-noselect');
+					document.removeEventListener('selectstart', blockSelect, { capture: true } as any);
+					(window as any).removeEventListener('pointermove', onMove);
+					if (panFrame != null) {
+						cancelAnimationFrame(panFrame);
+						panFrame = null;
+					}
+				}
+			} else {
+				// interactionMode === 'none' : no zoom / no pan => coloring & tooltips only
+				root.style('cursor', 'default');
+				// No extra handlers (ensures clicks reach marks)
 			}
 		}
-		draw(); // initial render
+
+		// Initial draw uses existing overrides if present
+		draw(curXDomOverride ?? undefined, curYDomOverride ?? undefined);
 	});
 </script>
 
@@ -953,5 +1272,20 @@
 		border-radius: 6px;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 		max-width: 260px;
+	}
+	/* svelte-ignore css-unused-selector */
+	.pan-overlay {
+		touch-action: none;
+	}
+	.chart-wrap.panning,
+	.chart-wrap.panning * {
+		user-select: none;
+		-webkit-user-select: none;
+	}
+
+	:global(.global-noselect),
+	:global(.global-noselect *) {
+		user-select: none !important;
+		-webkit-user-select: none !important;
 	}
 </style>
