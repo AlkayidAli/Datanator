@@ -7,18 +7,12 @@ export interface ChartEncoding {
   groupBy?: string | null;
 }
 
-export interface ChartSize {
-  width?: number;
-  height?: number;
-}
-
 export interface ChartSpec {
   mark: ChartMark;
   encoding: ChartEncoding;
   title?: string;
   legend?: boolean;
-  size?: ChartSize;
-  // room for future D3 options (scales, axes, bins…)
+  // options still for future extensibility
   options?: Record<string, unknown>;
 }
 

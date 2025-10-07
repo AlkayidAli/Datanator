@@ -175,10 +175,6 @@
 			y: isPie ? (pieValue ? [pieValue] : []) : isHist ? [] : yAxes,
 			color: null
 		},
-		size: {
-			width: typeof width === 'number' && width > 0 ? width : undefined,
-			height: typeof height === 'number' && height > 0 ? height : undefined
-		},
 		options: {
 			axisLabels: {
 				x: xLabel || undefined,
@@ -216,6 +212,7 @@
 		} as Record<string, unknown>
 	});
 
+	// Auto width only (no manual override UI)
 	let chartAreaEl = $state<HTMLDivElement | null>(null);
 	let autoWidth = $state<number | null>(null);
 
@@ -232,11 +229,9 @@
 		if (resizeObs && chartAreaEl) resizeObs.unobserve(chartAreaEl);
 	});
 
-	const renderWidth = $derived<number>(
-		// explicit width from spec if provided, else observed container width, else fallback
-		spec.size?.width ?? autoWidth ?? 800
-	);
-	const renderHeight = $derived<number>(spec.size?.height ?? 500);
+	// Simplified render size (height fixed)
+	const renderWidth = $derived<number>(autoWidth ?? 800);
+	const renderHeight = 500;
 
 	$effect(() => {
 		dispatch('specChange', { spec });
@@ -319,22 +314,6 @@
 			<div class="row">
 				<label for="title">Title</label>
 				<input id="title" bind:value={title} placeholder="Chart title" />
-			</div>
-
-			<div class="row">
-				<label for="size-w">Size</label>
-				<div class="size">
-					<input
-						id="size-w"
-						type="number"
-						min="200"
-						step="20"
-						bind:value={width}
-						placeholder="Width"
-					/>
-					<span>×</span>
-					<input type="number" min="150" step="20" bind:value={height} placeholder="Height" />
-				</div>
 			</div>
 
 			<div class="row">
@@ -625,11 +604,6 @@
 		font-weight: 500;
 		color: #333;
 	}
-	.size {
-		display: inline-flex;
-		gap: 6px;
-		align-items: center;
-	}
 	.palette {
 		display: flex;
 		gap: 8px;
@@ -733,6 +707,32 @@
 		border-radius: 10px;
 		background: #fff;
 	}
+	.interaction-toggle > button {
+		border: none;
+		background: transparent;
+		cursor: pointer;
+		padding: 4px 6px;
+		border-radius: 8px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		color: #333;
+	}
+	.interaction-toggle > button.active {
+		background: #eef3ff;
+		color: #123;
+		font-weight: 600;
+	}
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
+	}
+
 	.interaction-toggle > button {
 		border: none;
 		background: transparent;

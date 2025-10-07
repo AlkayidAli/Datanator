@@ -119,7 +119,7 @@
 		const specKey = JSON.stringify({
 			mark: spec.mark,
 			enc: spec.encoding,
-			size: spec.size,
+			// removed size
 			title: spec.title,
 			legend: spec.legend
 		});
