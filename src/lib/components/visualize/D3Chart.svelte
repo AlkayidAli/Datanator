@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import { select, pointer } from 'd3-selection';
-	import { scaleLinear, scaleBand, scaleUtc, scaleOrdinal, type ScaleBand } from 'd3-scale';
+	import {
+		scaleLinear,
+		scaleBand,
+		scaleUtc,
+		scaleOrdinal,
+		scaleLog,
+		type ScaleBand
+	} from 'd3-scale';
 	import { axisBottom, axisLeft } from 'd3-axis';
 	import { extent, max, rollups, sum, bin } from 'd3-array';
 	import {
@@ -166,8 +173,15 @@
 			svg.attr('width', width).attr('height', height);
 			const root = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
 
-			const mark = spec.mark;
-			const enc = spec.encoding ?? {};
+			// BEFORE using spec.mark, handle layers fallback
+			const baseSpec: any =
+				spec.layers && spec.layers.length
+					? { ...spec, ...spec.layers[0], encoding: spec.layers[0].encoding }
+					: spec;
+			const mark = baseSpec.mark;
+			const enc = baseSpec.encoding ?? {};
+			const transforms = spec.transforms || baseSpec.transforms || {};
+
 			const palette: string[] =
 				Array.isArray(opts.palette) && opts.palette.length ? opts.palette : schemeTableau10;
 			const seriesOverrides: Record<string, string> = opts.colors?.series || {};
@@ -566,8 +580,16 @@
 				const dom = extent(nums) as [number, number];
 				if (!baseXDom) baseXDom = dom.slice() as any[];
 				const useDom = (curXDomOverride as [number, number]) ?? dom;
-				x = scaleLinear().domain(useDom).range([0, iw]);
-				if (!curXDomOverride) x.nice();
+				if (transforms.logX) {
+					const safe: [number, number] = [
+						Math.max(1e-6, useDom[0] <= 0 ? 1e-6 : useDom[0]),
+						Math.max(1e-6, useDom[1] <= 0 ? 1 : useDom[1])
+					];
+					x = scaleLog().domain(safe).range([0, iw]).clamp(true);
+				} else {
+					x = scaleLinear().domain(useDom).range([0, iw]);
+					if (!curXDomOverride) x.nice();
+				}
 			} else {
 				if (!baseXDom) baseXDom = categoriesDomain.slice();
 				const useDom = (curXDomOverride as string[]) ?? categoriesDomain;
@@ -593,8 +615,16 @@
 				const yDomDefault: [number, number] = [0, max(allYValues) ?? 0];
 				if (!baseYDom) baseYDom = yDomDefault.slice() as [number, number];
 				const useYDom = (curYDomOverride as [number, number]) ?? yDomDefault;
-				y = scaleLinear().domain(useYDom).range([ih, 0]);
-				if (!curYDomOverride) y.nice();
+				if (transforms.logY) {
+					const safe: [number, number] = [
+						Math.max(1e-6, useYDom[0] <= 0 ? 1e-6 : useYDom[0]),
+						Math.max(1e-6, useYDom[1] <= 0 ? 1 : useYDom[1])
+					];
+					y = scaleLog().domain(safe).range([ih, 0]).clamp(true);
+				} else {
+					y = scaleLinear().domain(useYDom).range([ih, 0]);
+					if (!curYDomOverride) y.nice();
+				}
 			}
 
 			// Axes
@@ -733,11 +763,32 @@
 				}
 				drawLegend(seriesKeys, seriesColor);
 			} else if (mark === 'scatter') {
-				const r = clamp(Number(opts.scatter?.radius ?? 3.5), 1, 12);
+				// Support size channel & richer tooltips
+				const baseR = clamp(Number(opts.scatter?.radius ?? 3.5), 1, 12);
+				let sizeScale: ((v: unknown) => number) | null = null;
+				if (enc.size) {
+					const vals = (rows as any[])
+						.map((r) => toNum((r as any)[enc.size!]))
+						.filter((n): n is number => n != null && isFinite(n));
+					if (vals.length) {
+						const mn = Math.min(...vals);
+						const mx = Math.max(...vals);
+						const rMin = baseR * 0.5;
+						const rMax = baseR * 2.2;
+						sizeScale = (v: unknown) => {
+							const n = toNum(v);
+							if (n == null || !isFinite(n) || mx === mn) return baseR;
+							return rMin + ((n - mn) / (mx - mn)) * (rMax - rMin);
+						};
+					}
+				}
 				let globalIndex = 0;
+				const tooltipCols: string[] =
+					Array.isArray(enc.tooltip) && enc.tooltip.length ? enc.tooltip : [];
 				for (const [i, key] of seriesKeys.entries()) {
 					const pts = (rows as any[])
 						.map((row, idx) => ({
+							row,
 							x: enc.x ? (row as any)[enc.x] : idx,
 							y: yType === 'number' ? (toNum((row as any)[key]) as any) : String((row as any)[key])
 						}))
@@ -750,7 +801,7 @@
 						.append('circle')
 						.attr('cx', (d, i2) => xPos(d.x, i2))
 						.attr('cy', (d) => yPos(d.y))
-						.attr('r', r)
+						.attr('r', (d) => (sizeScale ? sizeScale((d.row as any)[enc.size!]) : baseR))
 						.attr('fill', (d) => {
 							const c = finalPointColor(key, i, globalIndex, d.x);
 							globalIndex++;
@@ -769,10 +820,22 @@
 								y: d.y
 							});
 						})
-						.attr('opacity', 0.85)
-						.on('pointerenter', (ev, d: any) =>
-							showTip(`<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}`, ev)
-						)
+						.attr('opacity', 0.82)
+						.on('pointerenter', (ev, d: any) => {
+							let html = `<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}`;
+							if (enc.size) {
+								const sv = (d.row as any)[enc.size];
+								html += `<br/>${enc.size}: ${sv}`;
+							}
+							if (tooltipCols.length) {
+								for (const col of tooltipCols) {
+									if (col === enc.x || col === key || col === enc.size) continue;
+									const v = (d.row as any)[col];
+									html += `<br/>${col}: ${v}`;
+								}
+							}
+							showTip(html, ev);
+						})
 						.on('pointermove', moveTip)
 						.on('pointerleave', hideTip);
 				}

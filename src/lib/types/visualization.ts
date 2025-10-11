@@ -2,9 +2,47 @@ export type ChartMark = 'line' | 'bar' | 'scatter' | 'pie' | 'area' | 'histogram
 
 export interface ChartEncoding {
   x?: string | null;
-  y?: string[];           // allow multi-series
-  color?: string | null;  // column for color scale
+  y?: string[];           // multi-series
+  color?: string | null;
   groupBy?: string | null;
+  size?: string | null;   // future
+  shape?: string | null;  // future
+  tooltip?: string[];     // list of columns to show in tooltip
+}
+
+export interface ChartLayer {
+  id: string;
+  mark: ChartMark;
+  encoding: ChartEncoding;
+  options?: Record<string, unknown>;
+  // Optional per-layer conditional styling (overrides global)
+  conditionalStyles?: ConditionalStyleRule[];
+  visible?: boolean;
+}
+
+export interface ConditionalStyleRule {
+  id: string;
+  expression: string;     // evaluated per row -> truthy => apply
+  color?: string;
+  stroke?: string;
+  size?: number;
+  label?: string;         // optional dynamic label (future)
+}
+
+export interface ChartTransforms {
+  logX?: boolean;
+  logY?: boolean;
+  binX?: { bins: number };
+  binY?: { bins: number };
+  // smoothing / rolling etc. placeholders
+  rollingMean?: { window: number; on: 'y' };
+}
+
+export interface CustomTooltipConfig {
+  // Array of template lines, e.g. "Sales: {Sales}" supports {column}
+  lines?: string[];
+  // Raw HTML disabled by default for safety (future)
+  allowHTML?: boolean;
 }
 
 export interface ChartSpec {
@@ -12,8 +50,13 @@ export interface ChartSpec {
   encoding: ChartEncoding;
   title?: string;
   legend?: boolean;
-  // options still for future extensibility
-  options?: Record<string, unknown>;
+  layers?: ChartLayer[];                // advanced mode
+  conditionalStyles?: ConditionalStyleRule[]; // global
+  transforms?: ChartTransforms;
+  tooltips?: CustomTooltipConfig;
+  options?: Record<string, unknown>;    // existing options bag
+  // UI helpers (not used by renderer directly)
+  computedFields?: { name: string; expression: string }[];
 }
 
 export interface VisualizationRecord {
