@@ -23,7 +23,21 @@ interface Token {
 }
 
 const FUNC_SET = new Set(['log', 'ln', 'sqrt', 'abs', 'min', 'max']);
-const OP_PRECEDENCE: Record<string, number> = { '^': 4, '*': 3, '/': 3, '+': 2, '-': 2 };
+const OP_PRECEDENCE: Record<string, number> = {
+  '^': 5,
+  '*': 4,
+  '/': 4,
+  '+': 3,
+  '-': 3,
+  '>': 2,
+  '<': 2,
+  '>=': 2,
+  '<=': 2,
+  '==': 2,
+  '!=': 2,
+  '&&': 1,
+  '||': 0,
+};
 const RIGHT_ASSOC = new Set(['^']);
 
 export function parseExpression(src: string): ParsedExpression {
@@ -36,6 +50,17 @@ export function parseExpression(src: string): ParsedExpression {
   while (i < s.length) {
     const c = s[i];
     if (/\s/.test(c)) { i++; continue; }
+    // Column reference with braces: {Column Name}
+    if (c === '{') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '}') j++;
+      if (j >= s.length) throw new Error("Unclosed '{' in column reference");
+      const name = s.slice(i + 1, j).trim();
+      if (!name) throw new Error('Empty column reference');
+      tokens.push({ t: 'id', v: name });
+      i = j + 1;
+      continue;
+    }
     if (/[0-9.]/.test(c)) {
       let j = i + 1;
       while (j < s.length && /[0-9._eE+-]/.test(s[j])) j++;
@@ -54,6 +79,22 @@ export function parseExpression(src: string): ParsedExpression {
       else tokens.push({ t: 'id', v: name });
       i = j;
       continue;
+    }
+    // Multi-char operators first
+    if (c === '>' || c === '<' || c === '=' || c === '!' || c === '&' || c === '|') {
+      const two = s.slice(i, i + 2);
+      if (two === '>=' || two === '<=' || two === '==' || two === '!=' || two === '&&' || two === '||') {
+        tokens.push({ t: 'op', v: two });
+        i += 2;
+        continue;
+      }
+      if (c === '>' || c === '<') {
+        tokens.push({ t: 'op', v: c });
+        i++;
+        continue;
+      }
+      // lone '=' or '!' is not supported
+      throw new Error(`Unexpected operator '${c}'`);
     }
     if ('+-*/^(),'.includes(c)) {
       tokens.push({ t: 'op', v: c });
@@ -135,7 +176,12 @@ export function evalParsed(parsed: ParsedExpression, ctx: EvalContext): number {
     switch (tk.t) {
       case 'num': st.push(tk.n!); break;
       case 'id': {
-        const v = ctx[tk.v];
+        // Prefer exact key (supports names with spaces when parsed from {Column Name})
+        let v = (ctx as any)[tk.v];
+        if (v === undefined) {
+          // Fallback: if the token looks like an identifier and exact key missing, try direct
+          v = (ctx as any)[tk.v];
+        }
         const num = typeof v === 'number' ? v : (v == null || v === '' ? NaN : Number(v));
         st.push(num);
         break;
@@ -149,8 +195,16 @@ export function evalParsed(parsed: ParsedExpression, ctx: EvalContext): number {
           case '+': r = a + b; break;
           case '-': r = a - b; break;
           case '*': r = a * b; break;
-            case '/': r = b === 0 ? NaN : a / b; break;
+          case '/': r = b === 0 ? NaN : a / b; break;
           case '^': r = Math.pow(a, b); break;
+          case '>': r = a > b ? 1 : 0; break;
+          case '<': r = a < b ? 1 : 0; break;
+          case '>=': r = a >= b ? 1 : 0; break;
+          case '<=': r = a <= b ? 1 : 0; break;
+          case '==': r = a === b ? 1 : 0; break;
+          case '!=': r = a !== b ? 1 : 0; break;
+          case '&&': r = (a !== 0 && !isNaN(a) && b !== 0 && !isNaN(b)) ? 1 : 0; break;
+          case '||': r = (a !== 0 && !isNaN(a)) || (b !== 0 && !isNaN(b)) ? 1 : 0; break;
           default: throw new Error('Bad operator ' + tk.v);
         }
         st.push(r);

@@ -735,7 +735,7 @@
 						.x((d, i) => xPos(d.x, i))
 						.y((d) => yPos(d.y))
 						.curve(curve);
-					gPlot
+					const path = gPlot
 						.append('path')
 						.attr('fill', 'none')
 						.attr('stroke', seriesColor(key, i))
@@ -750,8 +750,12 @@
 						.attr('cx', (d, i) => xPos(d.x, i))
 						.attr('cy', (d) => yPos(d.y))
 						.attr('r', 3)
-						.attr('fill', seriesColor(key, i))
-						.attr('opacity', 0.0)
+						.attr('fill', (d) => {
+							// If a point override exists, use it and make the point visible, otherwise keep series color but low opacity
+							const id = makeId(key, d.x);
+							return pointOverrides[id] || seriesColor(key, i);
+						})
+						.attr('opacity', (d) => (pointOverrides[makeId(key, d.x)] ? 0.95 : 0.0))
 						.on('pointerenter', (ev, d: any) =>
 							showTip(`<b>${key}</b><br/>${String(enc.x)}: ${d.x}<br/>value: ${d.y}`, ev)
 						)
@@ -1337,10 +1341,13 @@
 		max-width: 260px;
 	}
 	/* svelte-ignore css-unused-selector */
+	/* svelte-ignore css-unused-selector */
 	.pan-overlay {
 		touch-action: none;
 	}
+	/* svelte-ignore css-unused-selector */
 	.chart-wrap.panning,
+	/* svelte-ignore css-unused-selector */
 	.chart-wrap.panning * {
 		user-select: none;
 		-webkit-user-select: none;

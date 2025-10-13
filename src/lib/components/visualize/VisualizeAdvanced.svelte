@@ -49,22 +49,22 @@
 	function dropX(e: DragEvent) {
 		e.preventDefault();
 		const col = e.dataTransfer?.getData('text/plain');
-		if (col && headers.includes(col)) chanX = col;
+		if (col && allColumns.includes(col)) chanX = col;
 	}
 	function dropColor(e: DragEvent) {
 		e.preventDefault();
 		const col = e.dataTransfer?.getData('text/plain');
-		if (col && headers.includes(col)) chanColor = col;
+		if (col && allColumns.includes(col)) chanColor = col;
 	}
 	function dropSize(e: DragEvent) {
 		e.preventDefault();
 		const col = e.dataTransfer?.getData('text/plain');
-		if (col && headers.includes(col)) chanSize = col;
+		if (col && allColumns.includes(col)) chanSize = col;
 	}
 	function dropTooltip(e: DragEvent) {
 		e.preventDefault();
 		const col = e.dataTransfer?.getData('text/plain');
-		if (col && headers.includes(col)) {
+		if (col && allColumns.includes(col)) {
 			if (!chanTooltip.includes(col)) chanTooltip = [...chanTooltip, col];
 		}
 	}
@@ -74,7 +74,7 @@
 	function dropY(e: DragEvent) {
 		e.preventDefault();
 		const col = e.dataTransfer?.getData('text/plain');
-		if (col && headers.includes(col)) toggleY(col);
+		if (col && allColumns.includes(col)) toggleY(col);
 	}
 
 	// Formula fields
@@ -109,6 +109,144 @@
 		formulas = [...formulas];
 	}
 
+	// Suggestions for expressions and rule editors
+	const formulaNameId = (id: string) => `fname-${id}`;
+
+	// Generate identifier-safe suggestions for formula names from available columns
+	function toIdent(name: string) {
+		let s = name.trim().replace(/[^A-Za-z0-9_]+/g, '_');
+		if (!/^[A-Za-z_]/.test(s)) s = 'f_' + s;
+		return s.replace(/_{2,}/g, '_');
+	}
+	const nameListId = `names-${crypto.randomUUID()}`;
+	const nameSuggestions = $derived.by<string[]>(() => {
+		const set = new Set<string>();
+		for (const c of allColumns) set.add(toIdent(c));
+		return Array.from(set);
+	});
+
+	// Derived list of valid computed column names (only those that parse)
+	const computedColumnNames = $derived.by<string[]>(() =>
+		parsedFormulas
+			.filter(
+				(pf) => !!pf.parsed && !pf.error && pf.name && /^[A-Za-z_][A-Za-z0-9_]*$/.test(pf.name)
+			)
+			.map((pf) => pf.name)
+	);
+	// All columns available to the user: original headers + computed names
+	const allColumns = $derived.by<string[]>(() => {
+		const set = new Set<string>();
+		for (const h of headers) set.add(h);
+		for (const c of computedColumnNames) set.add(c);
+		return Array.from(set);
+	});
+
+	// Suggestions popover state
+	const funcSuggestions = ['log', 'ln', 'sqrt', 'abs', 'min', 'max', 'avg'] as const;
+	const funcSet = new Set(funcSuggestions);
+	let suggOpen = $state(false);
+	let suggItems = $state<string[]>([]);
+	let suggIndex = $state(0);
+	let suggAnchor: HTMLInputElement | null = null;
+	let suggPos = $state<{ left: number; top: number; width: number }>({
+		left: 0,
+		top: 0,
+		width: 220
+	});
+
+	function getTokenRange(
+		value: string,
+		caret: number
+	): { start: number; end: number; q: string } | null {
+		const left = value.slice(0, caret);
+		// Trigger on '{' or identifier tail
+		const braceIdx = left.lastIndexOf('{');
+		const identMatch = left.match(/[A-Za-z_][A-Za-z0-9_]*$/);
+		if (braceIdx >= 0 && braceIdx === left.length - 1) {
+			return { start: braceIdx, end: braceIdx + 1, q: '' };
+		}
+		if (identMatch) {
+			const start = left.length - identMatch[0].length;
+			return { start, end: left.length, q: identMatch[0] };
+		}
+		return null;
+	}
+	function openSuggest(input: HTMLInputElement) {
+		suggAnchor = input;
+		const rect = input.getBoundingClientRect();
+		suggPos = { left: rect.left, top: rect.bottom + 4, width: rect.width };
+		suggOpen = true;
+		suggIndex = 0;
+	}
+	function closeSuggest() {
+		suggOpen = false;
+		suggItems = [];
+		suggAnchor = null;
+	}
+	function updateSuggest(input: HTMLInputElement) {
+		const caret = input.selectionStart ?? input.value.length;
+		const tok = getTokenRange(input.value, caret);
+		if (!tok) {
+			closeSuggest();
+			return;
+		}
+		const q = tok.q.toLowerCase();
+		const colItems = allColumns.filter((c) => c.toLowerCase().includes(q));
+		const fnItems = funcSuggestions.filter((f) => f.includes(q));
+		const items = [...fnItems, ...colItems].slice(0, 50);
+		if (!items.length) {
+			closeSuggest();
+			return;
+		}
+		suggItems = items;
+		openSuggest(input);
+	}
+	function insertSuggestion(name: string) {
+		if (!suggAnchor) return;
+		const input = suggAnchor;
+		const caret = input.selectionStart ?? input.value.length;
+		const tok = getTokenRange(input.value, caret);
+		if (!tok) return;
+		const before = input.value.slice(0, tok.start);
+		const after = input.value.slice(tok.end);
+		const needsCloseBrace = input.value.slice(tok.start, tok.end) === '{';
+		let insert = name;
+		let caretDelta = 0;
+		if (funcSet.has(name as any)) {
+			insert = `${name}()`;
+			caretDelta = -1; // place caret inside parentheses
+		} else if (needsCloseBrace) {
+			insert = `{${name}}`;
+		}
+		const next = before + insert + after;
+		input.value = next;
+		const newCaret = before.length + insert.length + caretDelta;
+		input.setSelectionRange(newCaret, newCaret);
+		// Fire input event to update bindings
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		closeSuggest();
+	}
+	function onExprInput(e: Event) {
+		const el = e.target as HTMLInputElement;
+		updateSuggest(el);
+	}
+	function onExprKeydown(e: KeyboardEvent) {
+		if (!suggOpen) return;
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			suggIndex = (suggIndex + 1) % Math.max(1, suggItems.length);
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			suggIndex = (suggIndex - 1 + Math.max(1, suggItems.length)) % Math.max(1, suggItems.length);
+		} else if (e.key === 'Enter') {
+			e.preventDefault();
+			if (suggItems.length) insertSuggestion(suggItems[suggIndex]);
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			closeSuggest();
+		}
+	}
+
 	// Conditional styling rules
 	interface StyleRule {
 		id: string;
@@ -131,6 +269,9 @@
 
 	// Layer placeholder (single primary layer now)
 	let primaryMark = $state<'line' | 'scatter' | 'bar'>('line');
+
+	// Interaction mode: zoom / pan / none (parity with Easy tool)
+	let interactionMode = $state<'zoom' | 'pan' | 'none'>('zoom');
 
 	// ========================= Performance config =========================
 	const STYLE_EVAL_ROW_LIMIT = 4000; // hard cap for conditional rule evaluation
@@ -228,7 +369,8 @@
 			for (const pf of parsedFormulas) {
 				if (!pf.parsed || pf.error) continue;
 				try {
-					const val = evalParsed(pf.parsed, base);
+					// Evaluate against the growing clone so formulas can reference prior computed fields
+					const val = evalParsed(pf.parsed, clone);
 					clone[pf.name] = isFinite(val) ? val : null;
 				} catch {
 					clone[pf.name] = null;
@@ -402,8 +544,8 @@
 		const errs: string[] = [];
 		if (!chanX) errs.push('X not set');
 		if (!chanY.length) errs.push('Select at least one Y');
-		for (const y of chanY) if (!headers.includes(y)) errs.push(`Column '${y}' not found`);
-		if (chanX && !headers.includes(chanX)) errs.push(`Column '${chanX}' not found`);
+		for (const y of chanY) if (!allColumns.includes(y)) errs.push(`Column '${y}' not found`);
+		if (chanX && !allColumns.includes(chanX)) errs.push(`Column '${chanX}' not found`);
 		return errs;
 	});
 
@@ -601,7 +743,7 @@
 			<section>
 				<h4>Data columns</h4>
 				<div class="cols-list" role="list">
-					{#each headers as h}
+					{#each allColumns as h}
 						<!-- div -> button for a11y, add role & key support automatically by button -->
 						<button
 							type="button"
@@ -763,6 +905,7 @@
 						<input
 							class="fname"
 							placeholder="name"
+							id={formulaNameId(f.id)}
 							bind:value={f.name}
 							oninput={() => updateFormula(f)}
 						/>
@@ -770,7 +913,11 @@
 							class="fexpr"
 							placeholder="expression e.g. log(Sales)/Population"
 							bind:value={f.expression}
-							oninput={() => updateFormula(f)}
+							oninput={(e) => {
+								updateFormula(f);
+								onExprInput(e);
+							}}
+							onkeydown={onExprKeydown}
 						/>
 						<button class="secondary small" type="button" onclick={() => removeFormula(f.id)}
 							>✕</button
@@ -804,9 +951,11 @@
 							class="rexpr"
 							placeholder="expression e.g. Sales > 1000"
 							bind:value={r.expression}
-							oninput={() => {
+							oninput={(e) => {
 								/* trigger parse via state change */ styleRules = [...styleRules];
+								onExprInput(e);
 							}}
+							onkeydown={onExprKeydown}
 						/>
 						<input type="color" class="rcolor" bind:value={r.color} />
 						<button class="secondary small" type="button" onclick={() => removeRule(r.id)}>✕</button
@@ -825,8 +974,59 @@
 		{/if}
 	</aside>
 
+	<!-- datalist removed in favor of popover suggestions -->
+
+	{#if suggOpen}
+		<div
+			class="sugg-pop"
+			style={`left:${suggPos.left}px; top:${suggPos.top}px; width:${suggPos.width}px;`}
+			role="listbox"
+			aria-label="Column suggestions"
+		>
+			{#each suggItems as it, i}
+				<button
+					type="button"
+					role="option"
+					aria-selected={i === suggIndex}
+					class:active={i === suggIndex}
+					onclick={() => insertSuggestion(it)}>{it}</button
+				>
+			{/each}
+		</div>
+	{/if}
+
 	<section class="stage card">
 		<h3>Preview</h3>
+		<!-- Interaction mode toggle -->
+		<div class="interaction-toggle" role="group" aria-label="Interaction mode">
+			<button
+				type="button"
+				class:active={interactionMode === 'zoom'}
+				title="Zoom: drag to select area, click to zoom in, double‑click to reset"
+				aria-pressed={interactionMode === 'zoom'}
+				onclick={() => (interactionMode = 'zoom')}
+			>
+				<span class="material-symbols-outlined">zoom_in</span>
+			</button>
+			<button
+				type="button"
+				class:active={interactionMode === 'pan'}
+				title="Pan: drag to move the current zoomed view (keeps current zoom)"
+				aria-pressed={interactionMode === 'pan'}
+				onclick={() => (interactionMode = 'pan')}
+			>
+				<span class="material-symbols-outlined">pan_tool</span>
+			</button>
+			<button
+				type="button"
+				class:active={interactionMode === 'none'}
+				title="Mouse: no zoom/pan, use clicks for color overrides (color mode: point)"
+				aria-pressed={interactionMode === 'none'}
+				onclick={() => (interactionMode = 'none')}
+			>
+				<span class="material-symbols-outlined">mouse</span>
+			</button>
+		</div>
 		{#if isTruncated}
 			<p class="hint" style="margin-top:0;">
 				Showed first {PREVIEW_ROW_LIMIT.toLocaleString()} of {augmentedRows.length.toLocaleString()}
@@ -846,7 +1046,7 @@
 			</p>
 		{/if}
 		<div class="chart-area">
-			<D3Chart {spec} rows={chartRows} width={800} height={500} interactionMode="zoom" />
+			<D3Chart {spec} rows={chartRows} width={800} height={500} {interactionMode} />
 		</div>
 	</section>
 </div>
@@ -1088,5 +1288,60 @@
 	}
 	.sval {
 		color: #333;
+	}
+	/* Interaction toggle (parity with Easy tool) */
+	.interaction-toggle {
+		display: inline-flex;
+		gap: 6px;
+		margin: 0 0 8px;
+		border: 1px solid #e2e2e2;
+		padding: 4px 6px;
+		border-radius: 10px;
+		background: #fff;
+	}
+	.interaction-toggle > button {
+		border: none;
+		background: transparent;
+		cursor: pointer;
+		padding: 4px 6px;
+		border-radius: 8px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		color: #333;
+	}
+	.interaction-toggle > button.active {
+		background: #eef3ff;
+		color: #123;
+		font-weight: 600;
+	}
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
+	}
+	/* Suggestions popover */
+	.sugg-pop {
+		position: fixed;
+		z-index: 9999;
+		background: #fff;
+		border: 1px solid #d8dfea;
+		border-radius: 8px;
+		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+		max-height: 240px;
+		overflow: auto;
+		font-size: 0.8rem;
+	}
+	.sugg-pop > button {
+		padding: 6px 8px;
+		cursor: pointer;
+	}
+	.sugg-pop > button:hover,
+	.sugg-pop > button.active {
+		background: #eef3ff;
 	}
 </style>
