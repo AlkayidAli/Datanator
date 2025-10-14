@@ -641,14 +641,7 @@
 		font-size: 12px;
 		padding: 4px 8px;
 	}
-	.swatch > span {
-		width: 20px;
-		height: 20px;
-		border-radius: 4px;
-		border: 1px solid #ddd;
-		background: var(--c);
-		display: inline-block;
-	}
+	/* removed unused .swatch > span selector */
 	input.hex {
 		width: 110px;
 	}

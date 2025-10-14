@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import D3Chart from './D3Chart.svelte';
+	import ChartTypePicker from './ChartTypePicker.svelte';
 	import { parseExpression, tryEval, evalParsed } from '$lib/visualize/expr/eval';
-	import type { ChartSpec } from '$lib/types/visualization';
+	import type { ChartSpec, ChartMark } from '$lib/types/visualization';
 	import { schemeTableau10 } from 'd3-scale-chromatic';
 
 	const dispatch = createEventDispatcher<{ specChange: { spec: ChartSpec | null } }>();
@@ -269,7 +270,123 @@
 	let logY = $state(false);
 
 	// Layer placeholder (single primary layer now)
-	let primaryMark = $state<'line' | 'scatter' | 'bar'>('line');
+	let primaryMark = $state<ChartMark>('line');
+
+	// Chart type picker modal
+	let showTypePicker = $state(false);
+	let pendingType = $state<ChartMark>('line');
+	const chartTypes: Array<{
+		id: ChartMark;
+		name: string;
+		short: string; // grid short desc
+		long: string; // details longer desc
+		img: string; // small thumb
+		preview: string; // bigger preview image
+		link: string;
+	}> = [
+		{
+			id: 'line',
+			name: 'Line chart',
+			short: 'Trends over an ordered X axis.',
+			long: 'Line charts show how a value changes across an ordered X axis, often time. Multiple series can be compared.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/line.html'
+		},
+		{
+			id: 'scatter',
+			name: 'Scatter plot',
+			short: 'Relationship between two variables.',
+			long: 'Scatter plots reveal relationships and patterns between two numeric variables. Size and color can encode more dimensions.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/scatter.html'
+		},
+		{
+			id: 'bar',
+			name: 'Bar chart',
+			short: 'Compare values across categories.',
+			long: 'Bar charts compare quantities across discrete categories. They can be grouped to compare multiple series per category.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/barplot.html'
+		},
+		{
+			id: 'pie',
+			name: 'Pie / Donut',
+			short: 'Part-to-whole breakdown.',
+			long: 'Pie and donut charts show how a total divides into parts by category. Use sparingly with clear labeling.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/pie.html'
+		},
+		{
+			id: 'histogram',
+			name: 'Histogram',
+			short: 'Distribution of a numeric field.',
+			long: 'Histograms show the distribution of a single numeric variable by binning values along the X axis.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/histogram.html'
+		},
+		{
+			id: 'area',
+			name: 'Area chart',
+			short: 'Filled trends; stack to compare.',
+			long: 'Area charts fill the space under a line. Stacked area charts compare part-to-whole over time or ordered X.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/area.html'
+		},
+		{
+			id: 'boxplot',
+			name: 'Box plot',
+			short: 'Quartiles and outliers by category.',
+			long: 'Box plots summarize distributions via median, quartiles, whiskers, and outliers across categories.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/boxplot.html'
+		},
+		{
+			id: 'arc',
+			name: 'Arc diagram',
+			short: 'Connections as arcs along a line.',
+			long: 'Arc diagrams place nodes on a line and draw arcs to show connections between them. Arc height can imply distance.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/arc.html'
+		},
+		{
+			id: 'alluvial',
+			name: 'Alluvial (Sankey)',
+			short: 'Flows between categories.',
+			long: 'Alluvial/Sankey diagrams visualize flow magnitudes between categories using link widths.',
+			img: '/images/logo.png',
+			preview: '/images/logo.png',
+			link: 'https://www.data-to-viz.com/graph/sankey.html'
+		}
+	];
+	function openTypePicker() {
+		pendingType = primaryMark;
+		showTypePicker = true;
+	}
+	function applyTypePicker() {
+		primaryMark = pendingType;
+		// Reset irrelevant channels when switching types to avoid confusing state
+		if (primaryMark === 'histogram') {
+			chanY = [];
+			chanSize = null;
+			chanColor = null;
+		} else if (primaryMark === 'pie') {
+			// keep X as category, expect single Y value
+			if (chanY.length > 1) chanY = chanY.slice(0, 1);
+		} else if (primaryMark === 'arc' || primaryMark === 'alluvial') {
+			encSource = null;
+			encTarget = null;
+			encValue = null;
+		}
+		showTypePicker = false;
+	}
 
 	// Interaction mode: zoom / pan / none (parity with Easy tool)
 	let interactionMode = $state<'zoom' | 'pan' | 'none'>('zoom');
@@ -323,6 +440,11 @@
 			if (sizeMax <= sizeMin) sizeMax = sizeMin + 0.5;
 		}
 	});
+
+	// Additional encodings for flow diagrams
+	let encSource = $state<string | null>(null);
+	let encTarget = $state<string | null>(null);
+	let encValue = $state<string | null>(null);
 
 	// ========================= Performance config =========================
 	const STYLE_EVAL_ROW_LIMIT = 4000; // hard cap for conditional rule evaluation
@@ -529,7 +651,10 @@
 			y: chanY,
 			color: chanColor,
 			size: chanSize || undefined,
-			tooltip: chanTooltip.length ? chanTooltip : undefined
+			tooltip: chanTooltip.length ? chanTooltip : undefined,
+			source: encSource || undefined,
+			target: encTarget || undefined,
+			value: encValue || undefined
 		},
 		transforms: {
 			logX: logX || undefined,
@@ -600,10 +725,34 @@
 	// Add back channelErrors (was removed -> caused 'Cannot find name channelErrors')
 	const channelErrors = $derived.by<string[]>(() => {
 		const errs: string[] = [];
-		if (!chanX) errs.push('X not set');
-		if (!chanY.length) errs.push('Select at least one Y');
-		for (const y of chanY) if (!allColumns.includes(y)) errs.push(`Column '${y}' not found`);
-		if (chanX && !allColumns.includes(chanX)) errs.push(`Column '${chanX}' not found`);
+		switch (primaryMark) {
+			case 'histogram':
+				if (!chanX) errs.push('Field not set');
+				if (chanX && !allColumns.includes(chanX)) errs.push(`Column '${chanX}' not found`);
+				break;
+			case 'pie':
+				if (!chanX) errs.push('Category not set');
+				if (!chanY.length) errs.push('Value not set');
+				if (chanX && !allColumns.includes(chanX)) errs.push(`Column '${chanX}' not found`);
+				if (chanY.length && !allColumns.includes(chanY[0]))
+					errs.push(`Column '${chanY[0]}' not found`);
+				break;
+			case 'arc':
+			case 'alluvial':
+				if (!encSource) errs.push('Source not set');
+				if (!encTarget) errs.push('Target not set');
+				if (encSource && !allColumns.includes(encSource))
+					errs.push(`Column '${encSource}' not found`);
+				if (encTarget && !allColumns.includes(encTarget))
+					errs.push(`Column '${encTarget}' not found`);
+				if (encValue && !allColumns.includes(encValue)) errs.push(`Column '${encValue}' not found`);
+				break;
+			default:
+				if (!chanX) errs.push('X not set');
+				if (!chanY.length) errs.push('Select at least one Y');
+				for (const y of chanY) if (!allColumns.includes(y)) errs.push(`Column '${y}' not found`);
+				if (chanX && !allColumns.includes(chanX)) errs.push(`Column '${chanX}' not found`);
+		}
 		return errs;
 	});
 
@@ -821,12 +970,13 @@
 			<section class="group">
 				<h4>Chart & transforms</h4>
 				<div class="row">
-					<label for="markSelect">Mark</label>
-					<select id="markSelect" bind:value={primaryMark}>
-						<option value="line">Line</option>
-						<option value="scatter">Scatter</option>
-						<option value="bar">Bar</option>
-					</select>
+					<div class="fake-label" aria-hidden="true">Type</div>
+					<div class="type-chooser">
+						<button class="secondary small" type="button" onclick={openTypePicker}>
+							Choose chart type…
+						</button>
+						<span class="current-type">{primaryMark}</span>
+					</div>
 				</div>
 				<div class="row">
 					<div class="toggles">
@@ -859,7 +1009,13 @@
 				<h4>Channels</h4>
 				<div class="channels">
 					<div class="channel">
-						<span class="ch-label">X</span>
+						<span class="ch-label"
+							>{primaryMark === 'pie'
+								? 'Category'
+								: primaryMark === 'histogram'
+									? 'Field'
+									: 'X'}</span
+						>
 						<div
 							class="dropzone"
 							role="listbox"
@@ -873,32 +1029,120 @@
 								>{/if}
 						</div>
 					</div>
-					<div class="channel">
-						<span class="ch-label">Y</span>
-						<div
-							class="dropzone multi"
-							role="listbox"
-							aria-label="Y axis dropzone"
-							ondragover={allowDrop}
-							ondrop={dropY}
-							tabindex="0"
-						>
-							{#if chanY.length}
-								{#each chanY as y}
-									<!-- span -> button for a11y -->
+					{#if primaryMark === 'histogram'}
+						<!-- No Y for histogram -->
+					{:else if primaryMark === 'pie' || primaryMark === 'boxplot'}
+						<div class="channel">
+							<span class="ch-label">{primaryMark === 'pie' ? 'Value' : 'Value (numeric)'}</span>
+							<div
+								class="dropzone"
+								role="listbox"
+								aria-label="Y value"
+								ondragover={allowDrop}
+								ondrop={(e) => {
+									e.preventDefault();
+									const col = e.dataTransfer?.getData('text/plain');
+									if (col && allColumns.includes(col)) chanY = [col];
+								}}
+								tabindex="0"
+							>
+								{#if chanY.length}
 									<button
 										type="button"
 										class="tag removable"
-										title="Remove Y series"
-										onclick={() => toggleY(y)}
-										aria-label={`Remove ${y} from Y series`}>{y}</button
+										title="Remove value"
+										onclick={() => (chanY = [])}>{chanY[0]}</button
 									>
-								{/each}
-							{:else}
-								<span class="placeholder">Drop one or more</span>
-							{/if}
+								{:else}
+									<span class="placeholder">Drop one</span>
+								{/if}
+							</div>
 						</div>
-					</div>
+					{:else if primaryMark === 'arc' || primaryMark === 'alluvial'}
+						<div class="channel">
+							<span class="ch-label">Source</span>
+							<div
+								class="dropzone"
+								role="listbox"
+								aria-label="Source dropzone"
+								tabindex="0"
+								ondragover={allowDrop}
+								ondrop={(e) => {
+									e.preventDefault();
+									const col = e.dataTransfer?.getData('text/plain');
+									if (col && allColumns.includes(col)) encSource = col;
+								}}
+							>
+								{#if encSource}<span class="tag">{encSource}</span>{:else}<span class="placeholder"
+										>Drop column</span
+									>{/if}
+							</div>
+						</div>
+						<div class="channel">
+							<span class="ch-label">Target</span>
+							<div
+								class="dropzone"
+								role="listbox"
+								aria-label="Target dropzone"
+								tabindex="0"
+								ondragover={allowDrop}
+								ondrop={(e) => {
+									e.preventDefault();
+									const col = e.dataTransfer?.getData('text/plain');
+									if (col && allColumns.includes(col)) encTarget = col;
+								}}
+							>
+								{#if encTarget}<span class="tag">{encTarget}</span>{:else}<span class="placeholder"
+										>Drop column</span
+									>{/if}
+							</div>
+						</div>
+						<div class="channel">
+							<span class="ch-label">Value (optional)</span>
+							<div
+								class="dropzone"
+								role="listbox"
+								aria-label="Value dropzone"
+								tabindex="0"
+								ondragover={allowDrop}
+								ondrop={(e) => {
+									e.preventDefault();
+									const col = e.dataTransfer?.getData('text/plain');
+									if (col && allColumns.includes(col)) encValue = col;
+								}}
+							>
+								{#if encValue}<span class="tag">{encValue}</span>{:else}<span class="placeholder"
+										>Drop column</span
+									>{/if}
+							</div>
+						</div>
+					{:else}
+						<div class="channel">
+							<span class="ch-label">Y</span>
+							<div
+								class="dropzone multi"
+								role="listbox"
+								aria-label="Y axis dropzone"
+								ondragover={allowDrop}
+								ondrop={dropY}
+								tabindex="0"
+							>
+								{#if chanY.length}
+									{#each chanY as y}
+										<button
+											type="button"
+											class="tag removable"
+											title="Remove Y series"
+											onclick={() => toggleY(y)}
+											aria-label={`Remove ${y} from Y series`}>{y}</button
+										>
+									{/each}
+								{:else}
+									<span class="placeholder">Drop one or more</span>
+								{/if}
+							</div>
+						</div>
+					{/if}
 					<div class="channel">
 						<span class="ch-label">Color</span>
 						<div
@@ -1189,6 +1433,17 @@
 		</div>
 	</section>
 </div>
+
+<ChartTypePicker
+	open={showTypePicker}
+	value={primaryMark}
+	{chartTypes}
+	on:cancel={() => (showTypePicker = false)}
+	on:confirm={(e) => {
+		pendingType = e.detail.value as ChartMark;
+		applyTypePicker();
+	}}
+/>
 
 <style>
 	h4 {
@@ -1534,8 +1789,7 @@
 		background: #eef3ff;
 	}
 
-	/* Inputs/select match Easy */
-	select,
+	/* Inputs match Easy */
 	input {
 		padding: 6px 10px;
 		border: 1px solid #ddd;
@@ -1543,10 +1797,24 @@
 		background: #fff;
 		color: #222;
 	}
-	select:focus,
 	input:focus {
 		border-color: #4a90e2;
 		outline: none;
+	}
+
+	/* Type chooser pill */
+	.type-chooser {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.type-chooser .current-type {
+		font-size: 0.85rem;
+		color: #333;
+		background: #f3f6fb;
+		border: 1px solid #e0e6ef;
+		padding: 4px 8px;
+		border-radius: 8px;
 	}
 
 	/* Responsive stacking */

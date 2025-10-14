@@ -13,6 +13,7 @@
 	import { extent, max, rollups, sum, bin } from 'd3-array';
 	import {
 		line as shapeLine,
+		area as shapeArea,
 		curveLinear,
 		curveMonotoneX,
 		curveStep,
@@ -488,8 +489,11 @@
 				return;
 			}
 
-			// Require X/Y
-			if (!enc.x || !enc.y || !enc.y.length) {
+			// Require X/Y for marks that need them
+			if (
+				!['pie', 'histogram', 'arc', 'alluvial'].includes(mark) &&
+				(!enc.x || !enc.y || !enc.y.length)
+			) {
 				root
 					.append('text')
 					.attr('x', iw / 2)
@@ -967,6 +971,414 @@
 				if (colorField) {
 					drawLegend(colorDomain, (lab, i) => colorByValue(lab, i));
 				} else if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
+			} else if (mark === 'area') {
+				// Area chart: simple for one series; stacked for multiple
+				const curve = curveFrom(opts.area?.curve ?? 'linear');
+				// Prepare X points in order
+				let xOrdered: any[] = [];
+				if (hasBand(x)) {
+					xOrdered = (x.domain() as string[]).slice();
+				} else if (xType === 'time') {
+					xOrdered = (rows as any[])
+						.map((r) => (enc.x ? (r as any)[enc.x] : null))
+						.filter((v) => v != null)
+						.sort((a, b) => +toDate(a)! - +toDate(b)!);
+				} else {
+					xOrdered = (rows as any[])
+						.map((r) => (enc.x ? (r as any)[enc.x] : null))
+						.filter((v) => v != null)
+						.sort((a, b) => toNum(a)! - toNum(b)!);
+				}
+				// Deduplicate
+				xOrdered = Array.from(new Set(xOrdered));
+
+				if (seriesKeys.length <= 1) {
+					const key = seriesKeys[0] ?? (enc.y ? enc.y[0] : null);
+					if (!key) return;
+					const pts = xOrdered
+						.map((vx, i) => {
+							const row = (rows as any[]).find((r) => String((r as any)[enc.x!]) === String(vx));
+							const yv = row ? toNum((row as any)[key]) : null;
+							return { x: vx, y: yv ?? 0 };
+						})
+						.filter((d) => inXDomain(d.x));
+					const area = shapeArea<any>()
+						.x((d, i) => xPos(d.x, i))
+						.y0(() => y(0))
+						.y1((d) => yPos(d.y))
+						.curve(curve);
+					gPlot
+						.append('path')
+						.attr('fill', palette[0])
+						.attr('opacity', 0.6)
+						.attr('d', area(pts) ?? null);
+					return;
+				}
+
+				// Stacked area: compute cumulative y per x across series order
+				const stackData: { x: any; layers: { key: string; y0: number; y1: number }[] }[] =
+					xOrdered.map((vx) => ({ x: vx, layers: [] }));
+				for (const sd of stackData) {
+					let acc = 0;
+					for (const key of seriesKeys) {
+						const row = (rows as any[]).find((r) => String((r as any)[enc.x!]) === String(sd.x));
+						const val = row ? (toNum((row as any)[key]) ?? 0) : 0;
+						sd.layers.push({ key, y0: acc, y1: acc + val });
+						acc += val;
+					}
+				}
+				for (const [i, key] of seriesKeys.entries()) {
+					const pts = stackData
+						.map((sd) => ({ x: sd.x, y0: sd.layers[i].y0, y1: sd.layers[i].y1 }))
+						.filter((d) => inXDomain(d.x));
+					const area = shapeArea<any>()
+						.x((d, idx) => xPos(d.x, idx))
+						.y0((d) => y(d.y0))
+						.y1((d) => y(d.y1))
+						.curve(curve);
+					gPlot
+						.append('path')
+						.attr('fill', seriesOverrides[key] || palette[i % palette.length])
+						.attr('opacity', 0.7)
+						.attr('d', area(pts) ?? null);
+				}
+				if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
+				return;
+			} else if (mark === 'boxplot') {
+				// Box plot: categorical X, single numeric Y
+				const xField = enc.x!;
+				const yField = enc.y && enc.y[0];
+				if (!xField || !yField) {
+					root
+						.append('text')
+						.attr('x', iw / 2)
+						.attr('y', ih / 2)
+						.attr('text-anchor', 'middle')
+						.text('Select category (X) and one numeric value (Y)');
+					return;
+				}
+				const categories = Array.from(
+					new Set((rows as any[]).map((r) => String((r as any)[xField])))
+				);
+				const band = scaleBand<string>().domain(categories).range([0, iw]).padding(0.2);
+				const grouped: Record<string, number[]> = {};
+				for (const cat of categories) grouped[cat] = [];
+				for (const r of rows as any[]) {
+					const cat = String((r as any)[xField]);
+					const n = toNum((r as any)[yField]);
+					if (n != null && isFinite(n)) grouped[cat].push(n);
+				}
+				function quantiles(a: number[]) {
+					const s = a.slice().sort((x, y) => x - y);
+					const q1 = s[Math.floor((s.length - 1) * 0.25)];
+					const q2 = s[Math.floor((s.length - 1) * 0.5)];
+					const q3 = s[Math.floor((s.length - 1) * 0.75)];
+					const iqr = q3 - q1;
+					const lo = s.find((v) => v >= q1 - 1.5 * iqr) ?? s[0];
+					const hi =
+						s
+							.slice()
+							.reverse()
+							.find((v) => v <= q3 + 1.5 * iqr) ?? s[s.length - 1];
+					const outliers = s.filter((v) => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr);
+					return { q1, q2, q3, lo, hi, outliers };
+				}
+				const stats = categories.map((c) => ({ c, ...quantiles(grouped[c]) }));
+				const yMin = Math.min(...stats.map((s) => s.lo));
+				const yMax = Math.max(...stats.map((s) => s.hi));
+				const yScale = scaleLinear().domain([yMin, yMax]).nice().range([ih, 0]);
+
+				gx.call(axisBottom(band));
+				gy.call(axisLeft(yScale).ticks(5));
+				placeXLabel();
+				placeYLabel();
+				rotateTicks();
+
+				const boxW = Math.max(6, band.bandwidth() * 0.6);
+				const centerX = (c: string) => (band(c) ?? 0) + band.bandwidth() / 2;
+
+				for (const [i, s] of stats.entries()) {
+					const cx = centerX(s.c);
+					const fill = palette[i % palette.length];
+					// Whiskers
+					root
+						.append('line')
+						.attr('x1', cx)
+						.attr('x2', cx)
+						.attr('y1', yScale(s.lo))
+						.attr('y2', yScale(s.hi))
+						.attr('stroke', '#333');
+					root
+						.append('line')
+						.attr('x1', cx - boxW * 0.35)
+						.attr('x2', cx + boxW * 0.35)
+						.attr('y1', yScale(s.lo))
+						.attr('y2', yScale(s.lo))
+						.attr('stroke', '#333');
+					root
+						.append('line')
+						.attr('x1', cx - boxW * 0.35)
+						.attr('x2', cx + boxW * 0.35)
+						.attr('y1', yScale(s.hi))
+						.attr('y2', yScale(s.hi))
+						.attr('stroke', '#333');
+					// Box
+					root
+						.append('rect')
+						.attr('x', cx - boxW / 2)
+						.attr('y', yScale(s.q3))
+						.attr('width', boxW)
+						.attr('height', Math.max(1, yScale(s.q1) - yScale(s.q3)))
+						.attr('fill', fill)
+						.attr('opacity', 0.6)
+						.attr('stroke', '#333');
+					// Median
+					root
+						.append('line')
+						.attr('x1', cx - boxW / 2)
+						.attr('x2', cx + boxW / 2)
+						.attr('y1', yScale(s.q2))
+						.attr('y2', yScale(s.q2))
+						.attr('stroke', '#111')
+						.attr('stroke-width', 1.5);
+					// Outliers
+					for (const v of s.outliers) {
+						root
+							.append('circle')
+							.attr('cx', cx)
+							.attr('cy', yScale(v))
+							.attr('r', 2.5)
+							.attr('fill', fill)
+							.attr('opacity', 0.8);
+					}
+				}
+				return;
+			} else if (mark === 'arc') {
+				// Arc diagram: nodes along baseline at bottom; arcs connect source->target with thickness by value
+				const srcField = enc.source;
+				const tgtField = enc.target;
+				const valField = enc.value;
+				if (!srcField || !tgtField) {
+					root
+						.append('text')
+						.attr('x', iw / 2)
+						.attr('y', ih / 2)
+						.attr('text-anchor', 'middle')
+						.text('Select source and target fields');
+					return;
+				}
+				const links = (rows as any[])
+					.map((r) => ({
+						s: String((r as any)[srcField]),
+						t: String((r as any)[tgtField]),
+						w: valField ? (toNum((r as any)[valField]) ?? 1) : 1
+					}))
+					.filter((d) => d.s != null && d.t != null && isFinite(d.w));
+				const nodes = Array.from(new Set(links.flatMap((l) => [l.s, l.t])));
+				const xb = scaleBand<string>().domain(nodes).range([0, iw]).padding(0.1);
+				const baselineY = ih - 10;
+				const wVals = links.map((l) => l.w);
+				const wMin = Math.min(...wVals);
+				const wMax = Math.max(...wVals);
+				const strokeScale = (v: number) => {
+					if (!isFinite(v) || wMax <= 0) return 1.5;
+					const mn = Math.max(0, wMin);
+					const mx = wMax;
+					return 1.5 + ((v - mn) / (mx - mn || 1)) * 8; // 1.5..9.5 px
+				};
+
+				// Draw nodes and labels
+				const gn = root.append('g');
+				gn.selectAll('line')
+					.data(nodes)
+					.enter()
+					.append('line')
+					.attr('x1', (d) => (xb(d) ?? 0) + xb.bandwidth() / 2)
+					.attr('x2', (d) => (xb(d) ?? 0) + xb.bandwidth() / 2)
+					.attr('y1', baselineY)
+					.attr('y2', baselineY + 6)
+					.attr('stroke', '#555');
+				gn.selectAll('text')
+					.data(nodes)
+					.enter()
+					.append('text')
+					.attr('x', (d) => (xb(d) ?? 0) + xb.bandwidth() / 2)
+					.attr('y', baselineY + 18)
+					.attr('text-anchor', 'middle')
+					.attr('font-size', 11)
+					.text((d) => d);
+
+				// Draw arcs (quadratic Bezier)
+				const gl = root.append('g').attr('fill', 'none');
+				gl.selectAll('path')
+					.data(links)
+					.enter()
+					.append('path')
+					.attr('d', (d) => {
+						const x1 = (xb(d.s) ?? 0) + xb.bandwidth() / 2;
+						const x2 = (xb(d.t) ?? 0) + xb.bandwidth() / 2;
+						const dx = Math.abs(x2 - x1);
+						const h = Math.max(20, dx * 0.4);
+						const cpx = (x1 + x2) / 2;
+						const cpy = baselineY - h;
+						return `M${x1},${baselineY} Q${cpx},${cpy} ${x2},${baselineY}`;
+					})
+					.attr('stroke', (d, i) => palette[i % palette.length])
+					.attr('stroke-width', (d) => strokeScale(d.w))
+					.attr('opacity', 0.8);
+				return;
+			} else if (mark === 'alluvial') {
+				// Basic two-column alluvial (sankey-like) for Source -> Target using value as weight
+				const srcField = enc.source;
+				const tgtField = enc.target;
+				const valField = enc.value;
+				if (!srcField || !tgtField) {
+					root
+						.append('text')
+						.attr('x', iw / 2)
+						.attr('y', ih / 2)
+						.attr('text-anchor', 'middle')
+						.text('Select source and target fields');
+					return;
+				}
+				// Aggregate values by pair
+				const agg = new Map<string, number>();
+				const srcSet = new Set<string>();
+				const tgtSet = new Set<string>();
+				for (const r of rows as any[]) {
+					const s = String((r as any)[srcField]);
+					const t = String(/**/ (r as any)[tgtField]);
+					const w = valField ? (toNum((r as any)[valField]) ?? 1) : 1;
+					if (!isFinite(w)) continue;
+					srcSet.add(s);
+					tgtSet.add(t);
+					const key = `${s}\u0000${t}`;
+					agg.set(key, (agg.get(key) ?? 0) + w);
+				}
+				const sources = Array.from(srcSet);
+				const targets = Array.from(tgtSet);
+				const links = Array.from(agg, ([k, v]) => {
+					const [s, t] = k.split('\u0000');
+					return { s, t, w: v };
+				});
+				const total = links.reduce((a, b) => a + b.w, 0) || 1;
+
+				// Layout columns
+				const colPad = 80;
+				const xSrc = 0 + 10;
+				const xTgt = iw - colPad;
+				const nodePad = 8;
+				const colWidth = 18;
+				const heightAvail = ih - 20;
+
+				function layoutColumn(nodes: string[], weights: Map<string, number>) {
+					const sumW = Array.from(weights.values()).reduce((a, b) => a + b, 0) || 1;
+					const k = (heightAvail - nodePad * (nodes.length - 1)) / sumW;
+					let y = 10;
+					const pos: Record<string, { y0: number; y1: number }> = {};
+					for (const n of nodes) {
+						const h = (weights.get(n) ?? 0) * k;
+						pos[n] = { y0: y, y1: y + h };
+						y += h + nodePad;
+					}
+					return { pos, k };
+				}
+
+				// Compute node weights
+				const srcW = new Map<string, number>();
+				const tgtW = new Map<string, number>();
+				for (const { s, t, w } of links) {
+					srcW.set(s, (srcW.get(s) ?? 0) + w);
+					tgtW.set(t, (tgtW.get(t) ?? 0) + w);
+				}
+				const srcLayout = layoutColumn(sources, srcW);
+				const tgtLayout = layoutColumn(targets, tgtW);
+
+				// Draw nodes
+				const gNodes = root.append('g');
+				gNodes
+					.selectAll('rect.src')
+					.data(sources)
+					.enter()
+					.append('rect')
+					.attr('class', 'src')
+					.attr('x', xSrc)
+					.attr('y', (d) => srcLayout.pos[d].y0)
+					.attr('width', colWidth)
+					.attr('height', (d) => Math.max(2, srcLayout.pos[d].y1 - srcLayout.pos[d].y0))
+					.attr('fill', (d, i) => palette[i % palette.length])
+					.attr('opacity', 0.85);
+				gNodes
+					.selectAll('rect.tgt')
+					.data(targets)
+					.enter()
+					.append('rect')
+					.attr('class', 'tgt')
+					.attr('x', xTgt)
+					.attr('y', (d) => tgtLayout.pos[d].y0)
+					.attr('width', colWidth)
+					.attr('height', (d) => Math.max(2, tgtLayout.pos[d].y1 - tgtLayout.pos[d].y0))
+					.attr('fill', (d, i) => palette[i % palette.length])
+					.attr('opacity', 0.85);
+				// Labels
+				gNodes
+					.selectAll('text.src')
+					.data(sources)
+					.enter()
+					.append('text')
+					.attr('x', xSrc - 6)
+					.attr('y', (d) => (srcLayout.pos[d].y0 + srcLayout.pos[d].y1) / 2)
+					.attr('text-anchor', 'end')
+					.attr('dominant-baseline', 'middle')
+					.attr('font-size', 11)
+					.text((d) => d);
+				gNodes
+					.selectAll('text.tgt')
+					.data(targets)
+					.enter()
+					.append('text')
+					.attr('x', xTgt + colWidth + 6)
+					.attr('y', (d) => (tgtLayout.pos[d].y0 + tgtLayout.pos[d].y1) / 2)
+					.attr('text-anchor', 'start')
+					.attr('dominant-baseline', 'middle')
+					.attr('font-size', 11)
+					.text((d) => d);
+
+				// Draw flows
+				const gLinks = root.append('g').attr('fill', 'none').attr('stroke-opacity', 0.4);
+				// Track offsets within each node
+				const srcOffset = new Map<string, number>();
+				const tgtOffset = new Map<string, number>();
+				for (const s of sources) srcOffset.set(s, srcLayout.pos[s].y0);
+				for (const t of targets) tgtOffset.set(t, tgtLayout.pos[t].y0);
+				const xL = xSrc + colWidth;
+				const xR = xTgt;
+				const dx = xR - xL;
+				const curvature = 0.5;
+				const kSrc =
+					(heightAvail - nodePad * (sources.length - 1)) /
+					(Array.from(srcW.values()).reduce((a, b) => a + b, 0) || 1);
+				const kTgt =
+					(heightAvail - nodePad * (targets.length - 1)) /
+					(Array.from(tgtW.values()).reduce((a, b) => a + b, 0) || 1);
+				links.sort((a, b) => sources.indexOf(a.s) - sources.indexOf(b.s));
+				for (const [i, link] of links.entries()) {
+					const hL = link.w * kSrc;
+					const hR = link.w * kTgt;
+					const y0 = srcOffset.get(link.s)! + hL / 2;
+					const y1 = tgtOffset.get(link.t)! + hR / 2;
+					const c1x = xL + dx * curvature;
+					const c2x = xR - dx * curvature;
+					const path = `M${xL},${y0} C${c1x},${y0} ${c2x},${y1} ${xR},${y1}`;
+					gLinks
+						.append('path')
+						.attr('d', path)
+						.attr('stroke', palette[i % palette.length])
+						.attr('stroke-width', Math.max(2, (hL + hR) / 2));
+					srcOffset.set(link.s, srcOffset.get(link.s)! + hL);
+					tgtOffset.set(link.t, tgtOffset.get(link.t)! + hR);
+				}
+				return;
 			}
 
 			// ===== Interaction modes =====
@@ -1373,15 +1785,11 @@
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 		max-width: 260px;
 	}
-	/* svelte-ignore css-unused-selector */
-	/* svelte-ignore css-unused-selector */
-	.pan-overlay {
+	:global(.pan-overlay) {
 		touch-action: none;
 	}
-	/* svelte-ignore css-unused-selector */
-	.chart-wrap.panning,
-	/* svelte-ignore css-unused-selector */
-	.chart-wrap.panning * {
+	:global(.chart-wrap.panning),
+	:global(.chart-wrap.panning *) {
 		user-select: none;
 		-webkit-user-select: none;
 	}

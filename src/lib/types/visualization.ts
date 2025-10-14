@@ -1,4 +1,13 @@
-export type ChartMark = 'line' | 'bar' | 'scatter' | 'pie' | 'area' | 'histogram';
+export type ChartMark =
+  | 'line'
+  | 'bar'
+  | 'scatter'
+  | 'pie'
+  | 'area'
+  | 'histogram'
+  | 'boxplot'
+  | 'arc'
+  | 'alluvial';
 
 export interface ChartEncoding {
   x?: string | null;
@@ -8,6 +17,10 @@ export interface ChartEncoding {
   size?: string | null;   // future
   shape?: string | null;  // future
   tooltip?: string[];     // list of columns to show in tooltip
+  // Flow/graph encodings (for arc/alluvial)
+  source?: string | null;
+  target?: string | null;
+  value?: string | null;  // weight
 }
 
 export interface ChartLayer {
