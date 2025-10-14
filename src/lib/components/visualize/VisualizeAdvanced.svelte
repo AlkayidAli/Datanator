@@ -3,6 +3,7 @@
 	import D3Chart from './D3Chart.svelte';
 	import { parseExpression, tryEval, evalParsed } from '$lib/visualize/expr/eval';
 	import type { ChartSpec } from '$lib/types/visualization';
+	import { schemeTableau10 } from 'd3-scale-chromatic';
 
 	const dispatch = createEventDispatcher<{ specChange: { spec: ChartSpec | null } }>();
 
@@ -273,6 +274,56 @@
 	// Interaction mode: zoom / pan / none (parity with Easy tool)
 	let interactionMode = $state<'zoom' | 'pan' | 'none'>('zoom');
 
+	// Encoding customization: color mapping and size range
+	let colorMap = $state<Record<string, string>>({});
+	// Will compute categories from current rows for the selected color column
+	const colorCategories = $derived.by<string[]>(() => {
+		if (!chanColor) return [];
+		const set = new Set<string>();
+		for (const r of augmentedRows) {
+			const v = r[chanColor];
+			if (v == null) continue;
+			const s = String(v);
+			if (s) set.add(s);
+		}
+		return Array.from(set);
+	});
+	$effect(() => {
+		if (!chanColor) {
+			colorMap = {};
+			return;
+		}
+		const next: Record<string, string> = {};
+		const pal = schemeTableau10 as string[];
+		colorCategories.forEach((cat, i) => {
+			next[cat] = colorMap[cat] || pal[i % pal.length];
+		});
+		const a = Object.keys(colorMap);
+		const b = Object.keys(next);
+		if (a.length !== b.length || b.some((k) => colorMap[k] !== next[k])) {
+			colorMap = next;
+		}
+	});
+	function resetColorMap() {
+		const pal = schemeTableau10 as string[];
+		const next: Record<string, string> = {};
+		colorCategories.forEach((cat, i) => (next[cat] = pal[i % pal.length]));
+		colorMap = next;
+	}
+
+	// Size range controls for scatter when size channel is set
+	let sizeMin = $state<number>(2);
+	let sizeMax = $state<number>(12);
+	$effect(() => {
+		if (!chanSize) {
+			sizeMin = 2;
+			sizeMax = 12;
+		} else {
+			if (sizeMin < 1) sizeMin = 1;
+			if (sizeMax <= sizeMin) sizeMax = sizeMin + 0.5;
+		}
+	});
+
 	// ========================= Performance config =========================
 	const STYLE_EVAL_ROW_LIMIT = 4000; // hard cap for conditional rule evaluation
 	const STYLE_EVAL_TRUNCATE_NOTE_THRESHOLD = 1500; // show hint if truncated
@@ -491,8 +542,15 @@
 		options: {
 			colors: {
 				pointOverrides,
-				mode: 'point'
-			}
+				mode: 'point',
+				categorical: chanColor
+					? {
+							field: chanColor,
+							map: colorMap
+						}
+					: undefined
+			},
+			scatter: chanSize ? { sizeRange: [sizeMin, sizeMax] } : undefined
 		}
 	});
 
@@ -710,11 +768,30 @@
 		return out;
 	}
 
-	import { onDestroy } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	onDestroy(() => {
 		if (pendingSpecFrame != null) cancelAnimationFrame(pendingSpecFrame);
 		if (pointOverrideFrame != null) cancelAnimationFrame(pointOverrideFrame);
 	});
+	// Auto width like Easy tool
+	let chartAreaEl = $state<HTMLDivElement | null>(null);
+	let autoWidth = $state<number | null>(null);
+	let resizeObs: ResizeObserver | null = null;
+	onMount(() => {
+		if (chartAreaEl) {
+			const apply = () => (autoWidth = chartAreaEl!.clientWidth);
+			resizeObs = new ResizeObserver(apply);
+			resizeObs.observe(chartAreaEl);
+			apply();
+		}
+	});
+	onDestroy(() => {
+		if (resizeObs && chartAreaEl) resizeObs.unobserve(chartAreaEl);
+	});
+
+	// Render size
+	const renderWidth = $derived<number>(autoWidth ?? 800);
+	const renderHeight = 500;
 </script>
 
 <div class="adv-layout">
@@ -740,11 +817,31 @@
 		</header>
 
 		{#if !showRaw}
-			<section>
+			<!-- Move Mark & transforms to the top for better UX -->
+			<section class="group">
+				<h4>Chart & transforms</h4>
+				<div class="row">
+					<label for="markSelect">Mark</label>
+					<select id="markSelect" bind:value={primaryMark}>
+						<option value="line">Line</option>
+						<option value="scatter">Scatter</option>
+						<option value="bar">Bar</option>
+					</select>
+				</div>
+				<div class="row">
+					<div class="toggles">
+						<label><input type="checkbox" bind:checked={logX} /> log X</label>
+						<label><input type="checkbox" bind:checked={logY} /> log Y</label>
+					</div>
+				</div>
+			</section>
+
+			<hr />
+
+			<section class="group">
 				<h4>Data columns</h4>
 				<div class="cols-list" role="list">
 					{#each allColumns as h}
-						<!-- div -> button for a11y, add role & key support automatically by button -->
 						<button
 							type="button"
 							class="col-chip"
@@ -756,7 +853,9 @@
 				</div>
 			</section>
 
-			<section>
+			<hr />
+
+			<section class="group">
 				<h4>Channels</h4>
 				<div class="channels">
 					<div class="channel">
@@ -858,6 +957,55 @@
 				<div class="chan-errors">
 					{#each channelErrors as err}<span class="err">{err}</span>{/each}
 				</div>
+				{#if chanColor}
+					<div class="encoding-box">
+						<h5>Color mapping ({chanColor})</h5>
+						{#if !colorCategories.length}
+							<p class="hint">No categories found in {chanColor}.</p>
+						{:else}
+							<div class="color-map-list">
+								{#each colorCategories as cat, i}
+									<div class="row">
+										<span class="cat-label" title={cat}>{cat}</span>
+										<input
+											type="color"
+											value={colorMap[cat]}
+											oninput={(e) =>
+												(colorMap = { ...colorMap, [cat]: (e.target as HTMLInputElement).value })}
+											aria-label={`Color for ${cat}`}
+										/>
+										<input
+											class="hex"
+											value={colorMap[cat]}
+											oninput={(e) =>
+												(colorMap = { ...colorMap, [cat]: (e.target as HTMLInputElement).value })}
+										/>
+									</div>
+								{/each}
+								<div class="row">
+									<div class="fake-label" aria-hidden="true"></div>
+									<button class="secondary small" type="button" onclick={resetColorMap}
+										>Reset</button
+									>
+								</div>
+							</div>
+						{/if}
+					</div>
+				{/if}
+				{#if chanSize}
+					<div class="encoding-box">
+						<h5>Size range ({chanSize})</h5>
+						<div class="row">
+							<label for="sizemin">Min radius</label>
+							<input id="sizemin" type="number" min="1" max="50" step="0.5" bind:value={sizeMin} />
+						</div>
+						<div class="row">
+							<label for="sizemax">Max radius</label>
+							<input id="sizemax" type="number" min="1" max="120" step="0.5" bind:value={sizeMax} />
+						</div>
+						<p class="hint">Applies to scatter plots. Other marks ignore size range.</p>
+					</div>
+				{/if}
 				{#if chanX || chanY.length || chanSize}
 					<div class="stats-box">
 						<h5>Column stats</h5>
@@ -877,26 +1025,9 @@
 				{/if}
 			</section>
 
-			<section>
-				<h4>Mark & transforms</h4>
-				<div class="row">
-					<label for="markSelect">Mark</label>
-					<select id="markSelect" bind:value={primaryMark}>
-						<option value="line">Line</option>
-						<option value="scatter">Scatter</option>
-						<option value="bar">Bar</option>
-					</select>
-				</div>
-				<div class="row">
-					<span class="ch-label" aria-hidden="true">Scale</span>
-					<div class="toggles">
-						<label><input type="checkbox" bind:checked={logX} /> log X</label>
-						<label><input type="checkbox" bind:checked={logY} /> log Y</label>
-					</div>
-				</div>
-			</section>
+			<hr />
 
-			<section>
+			<section class="group">
 				<h4>Computed fields</h4>
 				<button class="secondary small" type="button" onclick={addFormula}>+ Add formula</button>
 				{#if !formulas.length}<p class="hint">No formulas yet.</p>{/if}
@@ -931,7 +1062,9 @@
 				{/each}
 			</section>
 
-			<section>
+			<hr />
+
+			<section class="group">
 				<h4>Conditional styling</h4>
 				<button class="secondary small" type="button" onclick={addRule}>+ Add rule</button>
 				{#if pointOverrideComputing}
@@ -1045,23 +1178,41 @@
 				{/if}
 			</p>
 		{/if}
-		<div class="chart-area">
-			<D3Chart {spec} rows={chartRows} width={800} height={500} {interactionMode} />
+		<div class="chart-area" bind:this={chartAreaEl}>
+			<D3Chart
+				{spec}
+				rows={chartRows}
+				width={renderWidth}
+				height={renderHeight}
+				{interactionMode}
+			/>
 		</div>
 	</section>
 </div>
 
 <style>
+	h4 {
+		font-size: 1.25rem;
+		font-weight: 600;
+		margin: 0 0 8px;
+	}
 	.adv-layout {
 		display: flex;
 		gap: 16px;
 	}
 	.panel {
-		width: 420px;
+		width: 400px;
 		flex: 0 0 auto;
 		display: flex;
 		flex-direction: column;
 		gap: 14px;
+	}
+	.card {
+		border: 1px solid #e6e6e6;
+		border-radius: 12px;
+		padding: 12px;
+		background: #fff;
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 	}
 	.hdr {
 		display: flex;
@@ -1104,6 +1255,15 @@
 	.col-chip:focus-visible {
 		outline: 2px solid #4a90e2;
 		outline-offset: 2px;
+	}
+	.group {
+		display: grid;
+		gap: 8px;
+	}
+	.row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 	}
 	.channels {
 		display: grid;
@@ -1207,11 +1367,6 @@
 		border: 1px solid #d5dbe4;
 		border-radius: 6px;
 	}
-	.row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
 	.toggles {
 		display: flex;
 		gap: 14px;
@@ -1237,6 +1392,12 @@
 		flex-wrap: wrap;
 		gap: 6px;
 	}
+	.stage {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
 	.chart-area {
 		border: 1px dashed #cfd6e4;
 		border-radius: 12px;
@@ -1246,9 +1407,11 @@
 		justify-content: center;
 		align-items: center;
 		padding: 8px;
+		width: 100%;
+		box-sizing: border-box;
 	}
 	button.small {
-		font-size: 0.7rem;
+		font-size: 1rem;
 		padding: 4px 8px;
 	}
 	/* Dropzone focus */
@@ -1270,6 +1433,32 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+	}
+	.encoding-box {
+		margin-top: 8px;
+		background: #f6f8fb;
+		border: 1px solid #e0e6ef;
+		border-radius: 8px;
+		padding: 8px;
+	}
+	.encoding-box h5 {
+		margin: 0 0 6px;
+		font-size: 0.7rem;
+		font-weight: 600;
+		color: #445;
+	}
+	.color-map-list .row {
+		align-items: center;
+	}
+	.cat-label {
+		min-width: 140px;
+		max-width: 260px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	input.hex {
+		width: 110px;
 	}
 	.stats-box h5 {
 		margin: 0 0 2px;
@@ -1343,5 +1532,30 @@
 	.sugg-pop > button:hover,
 	.sugg-pop > button.active {
 		background: #eef3ff;
+	}
+
+	/* Inputs/select match Easy */
+	select,
+	input {
+		padding: 6px 10px;
+		border: 1px solid #ddd;
+		border-radius: 8px;
+		background: #fff;
+		color: #222;
+	}
+	select:focus,
+	input:focus {
+		border-color: #4a90e2;
+		outline: none;
+	}
+
+	/* Responsive stacking */
+	@media (max-width: 1100px) {
+		.adv-layout {
+			flex-direction: column;
+		}
+		.panel {
+			width: 100%;
+		}
 	}
 </style>

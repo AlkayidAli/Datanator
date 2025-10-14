@@ -646,6 +646,22 @@
 			const colorMode: 'series' | 'point' =
 				(opts.colors?.mode as any) === 'point' ? 'point' : 'series';
 
+			// Color channel (categorical) support
+			const colorField: string | null = enc.color ?? null;
+			const colorDomain: string[] = colorField
+				? Array.from(new Set((rows as any[]).map((r) => String((r as any)[colorField]))))
+				: [];
+			const categoricalCfg =
+				opts.colors?.categorical && opts.colors.categorical.field === colorField
+					? (opts.colors.categorical as any)
+					: null;
+			const categoricalMap: Record<string, string> = categoricalCfg?.map || {};
+			const colorScale = scaleOrdinal<string, string>().domain(colorDomain).range(palette);
+			function colorByValue(v: unknown, idx: number): string {
+				const key = String(v);
+				return categoricalMap[key] || colorScale(key) || palette[idx % palette.length];
+			}
+
 			// Allow coloring if explicit point mode OR interaction mouse mode (none)
 			const canColorIndividually = colorMode === 'point' || interactionMode === 'none';
 
@@ -718,6 +734,7 @@
 				for (const [i, key] of seriesKeys.entries()) {
 					let data = (rows as any[])
 						.map((r, idx) => ({
+							row: r,
 							x: enc.x ? (r as any)[enc.x] : idx,
 							y: yType === 'number' ? (toNum((r as any)[key]) as any) : String((r as any)[key])
 						}))
@@ -753,7 +770,9 @@
 						.attr('fill', (d) => {
 							// If a point override exists, use it and make the point visible, otherwise keep series color but low opacity
 							const id = makeId(key, d.x);
-							return pointOverrides[id] || seriesColor(key, i);
+							if (pointOverrides[id]) return pointOverrides[id];
+							if (colorField) return colorByValue((d as any).row[colorField], i);
+							return seriesColor(key, i);
 						})
 						.attr('opacity', (d) => (pointOverrides[makeId(key, d.x)] ? 0.95 : 0.0))
 						.on('pointerenter', (ev, d: any) =>
@@ -777,8 +796,11 @@
 					if (vals.length) {
 						const mn = Math.min(...vals);
 						const mx = Math.max(...vals);
-						const rMin = baseR * 0.5;
-						const rMax = baseR * 2.2;
+						const customRange = Array.isArray(opts.scatter?.sizeRange)
+							? (opts.scatter!.sizeRange as [number, number])
+							: null;
+						const rMin = customRange ? clamp(customRange[0], 1, 100) : baseR * 0.5;
+						const rMax = customRange ? clamp(customRange[1], rMin + 0.1, 120) : baseR * 2.2;
 						sizeScale = (v: unknown) => {
 							const n = toNum(v);
 							if (n == null || !isFinite(n) || mx === mn) return baseR;
@@ -807,6 +829,9 @@
 						.attr('cy', (d) => yPos(d.y))
 						.attr('r', (d) => (sizeScale ? sizeScale((d.row as any)[enc.size!]) : baseR))
 						.attr('fill', (d) => {
+							const id = makeId(key, d.x);
+							if (pointOverrides[id]) return pointOverrides[id];
+							if (colorField) return colorByValue((d.row as any)[colorField], globalIndex++);
 							const c = finalPointColor(key, i, globalIndex, d.x);
 							globalIndex++;
 							return c;
@@ -831,6 +856,10 @@
 								const sv = (d.row as any)[enc.size];
 								html += `<br/>${enc.size}: ${sv}`;
 							}
+							if (colorField) {
+								const cv = (d.row as any)[colorField];
+								html += `<br/>${colorField}: ${cv}`;
+							}
 							if (tooltipCols.length) {
 								for (const col of tooltipCols) {
 									if (col === enc.x || col === key || col === enc.size) continue;
@@ -843,7 +872,9 @@
 						.on('pointermove', moveTip)
 						.on('pointerleave', hideTip);
 				}
-				if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
+				if (colorField) {
+					drawLegend(colorDomain, (lab, i) => colorByValue(lab, i));
+				} else if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
 			} else if (mark === 'bar') {
 				let globalBarIndex = 0;
 				if (isBarH) {
@@ -933,7 +964,9 @@
 						}
 					}
 				}
-				if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
+				if (colorField) {
+					drawLegend(colorDomain, (lab, i) => colorByValue(lab, i));
+				} else if (colorMode === 'series') drawLegend(seriesKeys, seriesColor);
 			}
 
 			// ===== Interaction modes =====
