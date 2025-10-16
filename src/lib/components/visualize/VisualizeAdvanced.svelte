@@ -5,6 +5,15 @@
 	import { parseExpression, tryEval, evalParsed } from '$lib/visualize/expr/eval';
 	import type { ChartSpec, ChartMark } from '$lib/types/visualization';
 	import { schemeTableau10 } from 'd3-scale-chromatic';
+	import lineChartIcon from '$lib/components/common/line-chart-icon.webp';
+	import scatterChartIcon from '$lib/components/common/scatter-plot-icon.webp';
+	import barChartIcon from '$lib/components/common/column-chart-icon.webp';
+	import pieChartIcon from '$lib/components/common/pie-diagram-icon.webp';
+	import histogramChartIcon from '$lib/components/common/histogram-icon.webp';
+	import areaChartIcon from '$lib/components/common/area-chart-icon.webp';
+	import boxPlotIcon from '$lib/components/common/box-chart-icon.webp';
+	import arcDiagramIcon from '$lib/components/common/arc-diagram-icon.webp';
+	import scankeyChartIcon from '$lib/components/common/sankey-icon.webp';
 
 	const dispatch = createEventDispatcher<{ specChange: { spec: ChartSpec | null } }>();
 
@@ -289,8 +298,8 @@
 			name: 'Line chart',
 			short: 'Trends over an ordered X axis.',
 			long: 'Line charts show how a value changes across an ordered X axis, often time. Multiple series can be compared.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: lineChartIcon,
+			preview: lineChartIcon,
 			link: 'https://www.data-to-viz.com/graph/line.html'
 		},
 		{
@@ -298,8 +307,8 @@
 			name: 'Scatter plot',
 			short: 'Relationship between two variables.',
 			long: 'Scatter plots reveal relationships and patterns between two numeric variables. Size and color can encode more dimensions.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: scatterChartIcon,
+			preview: scatterChartIcon,
 			link: 'https://www.data-to-viz.com/graph/scatter.html'
 		},
 		{
@@ -307,8 +316,8 @@
 			name: 'Bar chart',
 			short: 'Compare values across categories.',
 			long: 'Bar charts compare quantities across discrete categories. They can be grouped to compare multiple series per category.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: barChartIcon,
+			preview: barChartIcon,
 			link: 'https://www.data-to-viz.com/graph/barplot.html'
 		},
 		{
@@ -316,8 +325,8 @@
 			name: 'Pie / Donut',
 			short: 'Part-to-whole breakdown.',
 			long: 'Pie and donut charts show how a total divides into parts by category. Use sparingly with clear labeling.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: pieChartIcon,
+			preview: pieChartIcon,
 			link: 'https://www.data-to-viz.com/graph/pie.html'
 		},
 		{
@@ -325,8 +334,8 @@
 			name: 'Histogram',
 			short: 'Distribution of a numeric field.',
 			long: 'Histograms show the distribution of a single numeric variable by binning values along the X axis.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: histogramChartIcon,
+			preview: histogramChartIcon,
 			link: 'https://www.data-to-viz.com/graph/histogram.html'
 		},
 		{
@@ -334,8 +343,8 @@
 			name: 'Area chart',
 			short: 'Filled trends; stack to compare.',
 			long: 'Area charts fill the space under a line. Stacked area charts compare part-to-whole over time or ordered X.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: areaChartIcon,
+			preview: areaChartIcon,
 			link: 'https://www.data-to-viz.com/graph/area.html'
 		},
 		{
@@ -343,8 +352,8 @@
 			name: 'Box plot',
 			short: 'Quartiles and outliers by category.',
 			long: 'Box plots summarize distributions via median, quartiles, whiskers, and outliers across categories.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: boxPlotIcon,
+			preview: boxPlotIcon,
 			link: 'https://www.data-to-viz.com/graph/boxplot.html'
 		},
 		{
@@ -352,8 +361,8 @@
 			name: 'Arc diagram',
 			short: 'Connections as arcs along a line.',
 			long: 'Arc diagrams place nodes on a line and draw arcs to show connections between them. Arc height can imply distance.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: arcDiagramIcon,
+			preview: arcDiagramIcon,
 			link: 'https://www.data-to-viz.com/graph/arc.html'
 		},
 		{
@@ -361,8 +370,8 @@
 			name: 'Alluvial (Sankey)',
 			short: 'Flows between categories.',
 			long: 'Alluvial/Sankey diagrams visualize flow magnitudes between categories using link widths.',
-			img: '/images/logo.png',
-			preview: '/images/logo.png',
+			img: scankeyChartIcon,
+			preview: scankeyChartIcon,
 			link: 'https://www.data-to-viz.com/graph/sankey.html'
 		}
 	];
