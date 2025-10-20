@@ -120,6 +120,9 @@
 	let prevH = -1;
 	let prevInteractionMode: string | null = null;
 
+	// Dynamic left margin to accommodate long Y tick labels outside the plot
+	let dynamicLeftMargin: number | null = null;
+
 	$effect(() => {
 		if (!svgEl) return;
 
@@ -167,7 +170,14 @@
 			const extraBottom = xRot === 90 ? 90 : xRot === 45 ? 44 : 18;
 			const extraLeft = yRot === 90 ? 72 : yRot === 45 ? 32 : 0;
 
-			const margin = { top: 28, right: 16, bottom: 40 + extraBottom, left: 56 + extraLeft };
+			// Use dynamic left margin if previously computed (to keep labels outside plot)
+			const baseLeft = 56 + extraLeft;
+			const margin = {
+				top: 28,
+				right: 16,
+				bottom: 40 + extraBottom,
+				left: dynamicLeftMargin ?? baseLeft
+			};
 			const iw = Math.max(10, width - margin.left - margin.right);
 			const ih = Math.max(10, height - margin.top - margin.bottom);
 
@@ -268,6 +278,7 @@
 				const yt = gy
 					.selectAll<SVGTextElement, unknown>('text')
 					.attr('dominant-baseline', 'middle');
+				// Render Y tick labels to the LEFT of the axis line (outside the plot)
 				if (yRot === 0) yt.attr('transform', null).style('text-anchor', 'end').attr('dx', '-0.4em');
 				else if (yRot === 45)
 					yt.attr('transform', 'translate(-6,0) rotate(-45)')
@@ -632,13 +643,33 @@
 			}
 
 			// Axes
-			gx.call(hasBand(x) ? axisBottom(x) : axisBottom(x).ticks(6));
+			const hideXAxis = mark === 'alluvial';
+			if (!hideXAxis) {
+				gx.call(hasBand(x) ? axisBottom(x) : axisBottom(x).ticks(6));
+				placeXLabel();
+			}
 			gy.call(hasBand(y) ? axisLeft(y) : axisLeft(y).ticks(5));
-			placeXLabel();
 			placeYLabel();
 			rotateTicks();
 			fixXTicks();
 			adjustAxisTitles();
+
+			// Measure Y tick width and, if needed, expand left margin and redraw once
+			{
+				const yTicks = gy.selectAll<SVGTextElement, unknown>('text').nodes();
+				if (yTicks.length) {
+					let maxW = 0;
+					for (const n of yTicks) maxW = Math.max(maxW, n.getBBox().width);
+					// desired left margin: max of base and label width + padding
+					const desiredLeft = Math.max(baseLeft, Math.ceil(maxW + 24));
+					if (dynamicLeftMargin == null || Math.abs(dynamicLeftMargin - desiredLeft) > 2) {
+						dynamicLeftMargin = desiredLeft;
+						// Redraw with updated margin (preserve existing overrides)
+						draw();
+						return;
+					}
+				}
+			}
 
 			const pointOverrides: Record<string, string> =
 				(opts.colors?.pointOverrides as Record<string, string>) || {};
@@ -1743,6 +1774,7 @@
 	.chart-wrap {
 		position: relative;
 		width: 100%;
+		overflow: hidden; /* contain long tick labels */
 	}
 	svg {
 		display: block;

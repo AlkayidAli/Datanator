@@ -5,6 +5,7 @@
 	import { parseExpression, tryEval, evalParsed } from '$lib/visualize/expr/eval';
 	import type { ChartSpec, ChartMark } from '$lib/types/visualization';
 	import { schemeTableau10 } from 'd3-scale-chromatic';
+	import { exportSvgElement, type ExportFormat } from '$lib/utils/exportImage';
 	import lineChartIcon from '$lib/components/common/line-chart-icon.webp';
 	import scatterChartIcon from '$lib/components/common/scatter-plot-icon.webp';
 	import barChartIcon from '$lib/components/common/column-chart-icon.webp';
@@ -17,9 +18,18 @@
 
 	const dispatch = createEventDispatcher<{ specChange: { spec: ChartSpec | null } }>();
 
-	let { headers, rows } = $props<{
+	let {
+		headers,
+		rows,
+		exportToken = 0,
+		exportName = 'chart',
+		exportFormat = 'png' as ExportFormat
+	} = $props<{
 		headers: string[];
 		rows: Record<string, unknown>[];
+		exportToken?: number;
+		exportName?: string;
+		exportFormat?: ExportFormat;
 	}>();
 
 	// Seed a minimal spec for convenience
@@ -38,6 +48,7 @@
 
 	// Remove defaultSpec.size usage; add advanced UI state
 	let showRaw = $state(false);
+	let jsonMenuOpen = $state(false);
 
 	// Channel assignments (drag & drop)
 	let chanX = $state<string | null>(headers[0] ?? null);
@@ -950,15 +961,35 @@
 	// Render size
 	const renderWidth = $derived<number>(autoWidth ?? 800);
 	const renderHeight = 500;
+
+	// Export on demand when exportToken changes (skip on initial mount)
+	let _prevExportToken: number | null = null;
+	$effect(() => {
+		if (_prevExportToken === null) {
+			_prevExportToken = exportToken;
+			return;
+		}
+		if (exportToken === _prevExportToken) return;
+		_prevExportToken = exportToken;
+		// defer to next frame to ensure chart is rendered
+		requestAnimationFrame(() => {
+			const host = chartAreaEl as HTMLDivElement | null;
+			if (!host) return;
+			const svg = host.querySelector('svg');
+			if (!svg) return;
+			exportSvgElement(svg as SVGSVGElement, {
+				filename: exportName || 'chart',
+				format: exportFormat,
+				scale: 2
+			}).catch(() => {});
+		});
+	});
 </script>
 
 <div class="adv-layout">
 	<aside class="panel card">
 		<header class="hdr">
 			<h3>Advanced builder</h3>
-			<button class="secondary small" onclick={() => (showRaw = !showRaw)}
-				>{showRaw ? 'GUI' : 'Raw JSON'}</button
-			>
 			<div class="hdr-actions">
 				<button class="secondary small" type="button" onclick={undo} disabled={undoStack.length < 2}
 					>Undo</button
@@ -966,11 +997,44 @@
 				<button class="secondary small" type="button" onclick={redo} disabled={!redoStack.length}
 					>Redo</button
 				>
-				<button class="secondary small" type="button" onclick={exportConfig}>Export</button>
-				<label class="import-btn secondary small">
-					Import
-					<input type="file" accept="application/json" onchange={handleImport} />
-				</label>
+				<div class="json-menu-wrap">
+					<button
+						class="secondary small"
+						type="button"
+						onclick={() => (jsonMenuOpen = !jsonMenuOpen)}>JSON</button
+					>
+					{#if jsonMenuOpen}
+						<div class="json-menu" role="menu">
+							<button
+								type="button"
+								role="menuitem"
+								onclick={() => {
+									showRaw = true;
+									jsonMenuOpen = false;
+								}}>Show JSON</button
+							>
+							<button
+								type="button"
+								role="menuitem"
+								onclick={() => {
+									exportConfig();
+									jsonMenuOpen = false;
+								}}>Export</button
+							>
+							<label class="import-btn">
+								Import
+								<input
+									type="file"
+									accept="application/json"
+									onchange={(e) => {
+										handleImport(e);
+										jsonMenuOpen = false;
+									}}
+								/>
+							</label>
+						</div>
+					{/if}
+				</div>
 			</div>
 		</header>
 
@@ -1487,6 +1551,37 @@
 		display: flex;
 		gap: 6px;
 		align-items: center;
+	}
+	.json-menu-wrap {
+		position: relative;
+	}
+	.json-menu {
+		position: absolute;
+		right: 0;
+		top: 32px;
+		background: #fff;
+		border: 1px solid #e2e6ec;
+		border-radius: 8px;
+		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+		padding: 6px;
+		display: grid;
+		gap: 4px;
+		z-index: 20;
+		min-width: 140px;
+	}
+	.json-menu > button,
+	.json-menu > label {
+		border: none;
+		background: transparent;
+		text-align: left;
+		padding: 6px 8px;
+		border-radius: 6px;
+		cursor: pointer;
+		font-size: 0.85rem;
+	}
+	.json-menu > button:hover,
+	.json-menu > label:hover {
+		background: #eef3ff;
 	}
 	.import-btn {
 		position: relative;

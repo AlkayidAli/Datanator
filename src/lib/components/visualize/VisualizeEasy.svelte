@@ -3,12 +3,22 @@
 	import D3Chart from './D3Chart.svelte';
 	import type { ChartSpec } from '$lib/types/visualization';
 	import { onMount, onDestroy } from 'svelte';
+	import { exportSvgElement, type ExportFormat } from '$lib/utils/exportImage';
 
 	const dispatch = createEventDispatcher<{ specChange: { spec: ChartSpec } }>();
 
-	let { headers, rows } = $props<{
+	let {
+		headers,
+		rows,
+		exportToken = 0,
+		exportName = 'chart',
+		exportFormat = 'png' as ExportFormat
+	} = $props<{
 		headers: string[];
 		rows: Record<string, unknown>[];
+		exportToken?: number;
+		exportName?: string;
+		exportFormat?: ExportFormat;
 	}>();
 
 	// Simple config
@@ -232,6 +242,28 @@
 	// Simplified render size (height fixed)
 	const renderWidth = $derived<number>(autoWidth ?? 800);
 	const renderHeight = 500;
+
+	// Export on demand (skip on initial mount)
+	let _prevExportToken: number | null = null;
+	$effect(() => {
+		if (_prevExportToken === null) {
+			_prevExportToken = exportToken;
+			return;
+		}
+		if (exportToken === _prevExportToken) return;
+		_prevExportToken = exportToken;
+		requestAnimationFrame(() => {
+			const host = chartAreaEl as HTMLDivElement | null;
+			if (!host) return;
+			const svg = host.querySelector('svg');
+			if (!svg) return;
+			exportSvgElement(svg as SVGSVGElement, {
+				filename: exportName || 'chart',
+				format: exportFormat,
+				scale: 2
+			}).catch(() => {});
+		});
+	});
 
 	$effect(() => {
 		dispatch('specChange', { spec });

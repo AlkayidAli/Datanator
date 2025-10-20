@@ -9,6 +9,7 @@
 
 	import VisualizeEasy from './VisualizeEasy.svelte';
 	import VisualizeAdvanced from './VisualizeAdvanced.svelte';
+	import { exportSvgElement } from '$lib/utils/exportImage';
 
 	// Dataset
 	const data = $derived<ParsedCSV | null>(
@@ -42,9 +43,15 @@
 		}
 	}
 
-	function exportChartImage() {
-		// TODO: Export chart as PNG/SVG
-		toasts.warning('Export not implemented yet.');
+	let exportBump = $state(0);
+	let exportFormat = $state<'png' | 'svg'>('png');
+	async function exportChartImage() {
+		try {
+			// Signal child to export via exportBump prop; child will locate its inner SVG
+			exportBump++;
+		} catch (e: any) {
+			toasts.error(e?.message ?? 'Export failed.');
+		}
 	}
 </script>
 
@@ -99,12 +106,18 @@
 			<VisualizeEasy
 				{headers}
 				rows={data.rows}
+				exportToken={exportBump}
+				exportName={currentSpec?.title || 'chart'}
+				{exportFormat}
 				on:specChange={(e) => (currentSpec = e.detail.spec)}
 			/>
 		{:else}
 			<VisualizeAdvanced
 				{headers}
 				rows={data.rows}
+				exportToken={exportBump}
+				exportName={currentSpec?.title || 'chart'}
+				{exportFormat}
 				on:specChange={(e) => (currentSpec = e.detail.spec)}
 			/>
 		{/if}
