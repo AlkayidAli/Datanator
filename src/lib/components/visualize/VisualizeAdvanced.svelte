@@ -338,7 +338,7 @@
 			long: 'Pie and donut charts show how a total divides into parts by category. Use sparingly with clear labeling.',
 			img: pieChartIcon,
 			preview: pieChartIcon,
-			link: 'https://www.data-to-viz.com/graph/pie.html'
+			link: 'https://www.data-to-viz.com/caveat/pie.html'
 		},
 		{
 			id: 'histogram',
@@ -365,7 +365,7 @@
 			long: 'Box plots summarize distributions via median, quartiles, whiskers, and outliers across categories.',
 			img: boxPlotIcon,
 			preview: boxPlotIcon,
-			link: 'https://www.data-to-viz.com/graph/boxplot.html'
+			link: 'https://www.data-to-viz.com/caveat/boxplot.html'
 		},
 		{
 			id: 'arc',
@@ -469,6 +469,7 @@
 	// ========================= Performance config =========================
 	const STYLE_EVAL_ROW_LIMIT = 4000; // hard cap for conditional rule evaluation
 	const STYLE_EVAL_TRUNCATE_NOTE_THRESHOLD = 1500; // show hint if truncated
+	const FORMULA_PREVIEW_LIMIT = 2000; // rows to recompute while typing (preview mode)
 	// =====================================================================
 
 	// Parsed caches
@@ -487,14 +488,29 @@
 		error?: string;
 	}
 
-	let parsedFormulas: ParsedFormula[] = [];
-	let parsedRules: ParsedRule[] = [];
+	let parsedFormulas = $state<ParsedFormula[]>([]);
+	let parsedRules = $state<ParsedRule[]>([]);
 
 	// Replace previous $derived augmentedRows with cached state version
 	let augmentedRows = $state<Record<string, unknown>[]>(rows);
 
 	// Keep stable reference to raw dataset length to detect change cheaply
 	let prevRowsRef: Record<string, unknown>[] = rows;
+
+	// Recompute strategy controls for computed fields
+	let manualApply = $state(false); // if true, only recompute when Apply is clicked
+	let typingPreview = $state(true); // if true and not manual, recompute a preview while typing
+	let augmentDebounceHandle: number | null = null; // short debounce timer
+	let augmentIdleFullHandle: number | null = null; // longer idle timer for full recompute
+	let lastAugmentSignature = $state('');
+
+	function currentFormulaSignature() {
+		const parts = parsedFormulas
+			.filter((f) => f.parsed && !f.error)
+			.map((f) => `${f.name}=${f.expression}`)
+			.sort();
+		return parts.join('|');
+	}
 
 	// Recompute parsed formulas whenever formulas array changes
 	$effect(() => {
@@ -513,8 +529,15 @@
 			}
 			return pf;
 		});
-		// Trigger augmentation if formulas themselves changed
-		recomputeAugmentedRows();
+		// Recompute strategy: manual apply, preview-while-typing, or full on debounce
+		if (manualApply) {
+			// wait for Apply
+		} else if (typingPreview) {
+			schedulePreviewRecompute();
+			scheduleFullRecompute();
+		} else {
+			scheduleFullRecompute(200);
+		}
 	});
 
 	// Recompute parsed rules whenever styleRules change
@@ -543,18 +566,64 @@
 		return m;
 	});
 
-	function recomputeAugmentedRows() {
-		// Only rebuild if formulas changed or base rows reference changed
-		const needRebuild = parsedFormulas.some((f) => !f.error && f.parsed) || prevRowsRef !== rows;
-		if (!needRebuild) return;
+	function clearRecomputeTimers() {
+		if (augmentDebounceHandle != null) {
+			window.clearTimeout(augmentDebounceHandle);
+			augmentDebounceHandle = null;
+		}
+		if (augmentIdleFullHandle != null) {
+			window.clearTimeout(augmentIdleFullHandle);
+			augmentIdleFullHandle = null;
+		}
+	}
+
+	function schedulePreviewRecompute(delay = 120) {
+		if (augmentDebounceHandle != null) window.clearTimeout(augmentDebounceHandle);
+		augmentDebounceHandle = window.setTimeout(() => {
+			augmentDebounceHandle = null;
+			recomputeAugmentedRows(FORMULA_PREVIEW_LIMIT);
+		}, delay);
+	}
+
+	function scheduleFullRecompute(delay = 800) {
+		if (augmentIdleFullHandle != null) window.clearTimeout(augmentIdleFullHandle);
+		augmentIdleFullHandle = window.setTimeout(() => {
+			augmentIdleFullHandle = null;
+			recomputeAugmentedRows();
+		}, delay);
+	}
+
+	function applyFormulasNow() {
+		// Immediate full recompute regardless of mode
+		if (augmentDebounceHandle != null) window.clearTimeout(augmentDebounceHandle);
+		if (augmentIdleFullHandle != null) window.clearTimeout(augmentIdleFullHandle);
+		// Reset signature so recompute runs
+		lastAugmentSignature = '';
+		recomputeAugmentedRows();
+	}
+
+	function recomputeAugmentedRows(limit?: number) {
+		const sig = currentFormulaSignature();
+		// Only rebuild if rows changed or valid formula signature changed
+		const rowsChanged = prevRowsRef !== rows;
+		const sigChanged = sig !== lastAugmentSignature;
+		const hasValid = parsedFormulas.some((f) => f.parsed && !f.error);
+		if (!hasValid && !rowsChanged) return;
+		if (!rowsChanged && !sigChanged) return;
 		prevRowsRef = rows;
+		lastAugmentSignature = sig;
 
 		// Heavy operation: do once, not every small UI update
 		const next: Record<string, unknown>[] = new Array(rows.length);
 		for (let i = 0; i < rows.length; i++) {
 			const base = rows[i];
 			// If no valid formulas, reuse row (keep identity for D3 performance)
-			if (!parsedFormulas.length || !parsedFormulas.some((f) => f.parsed && !f.error)) {
+			if (!hasValid) {
+				next[i] = base;
+				continue;
+			}
+			// In preview mode, keep tail rows as base to be fast
+			if (limit != null && i >= limit) {
 				next[i] = base;
 				continue;
 			}
@@ -562,7 +631,6 @@
 			for (const pf of parsedFormulas) {
 				if (!pf.parsed || pf.error) continue;
 				try {
-					// Evaluate against the growing clone so formulas can reference prior computed fields
 					const val = evalParsed(pf.parsed, clone);
 					clone[pf.name] = isFinite(val) ? val : null;
 				} catch {
@@ -941,6 +1009,8 @@
 	onDestroy(() => {
 		if (pendingSpecFrame != null) cancelAnimationFrame(pendingSpecFrame);
 		if (pointOverrideFrame != null) cancelAnimationFrame(pointOverrideFrame);
+		if (augmentDebounceHandle != null) window.clearTimeout(augmentDebounceHandle);
+		if (augmentIdleFullHandle != null) window.clearTimeout(augmentIdleFullHandle);
 	});
 	// Auto width like Easy tool
 	let chartAreaEl = $state<HTMLDivElement | null>(null);
@@ -1346,7 +1416,30 @@
 
 			<section class="group">
 				<h4>Computed fields</h4>
-				<button class="secondary small" type="button" onclick={addFormula}>+ Add formula</button>
+				<div class="row" style="align-items:center; gap:8px; flex-wrap:wrap;">
+					<button class="secondary small" type="button" onclick={addFormula}>+ Add formula</button>
+					<button class="small" type="button" onclick={applyFormulasNow}>Apply</button>
+					<label style="display:inline-flex; align-items:center; gap:6px; font-size:0.8rem;">
+						<input type="checkbox" bind:checked={manualApply} /> Manual apply
+					</label>
+					<label
+						style="display:inline-flex; align-items:center; gap:6px; font-size:0.8rem;"
+						style:opacity={manualApply ? 0.5 : 1}
+					>
+						<input type="checkbox" bind:checked={typingPreview} disabled={manualApply} /> Preview while
+						typing
+					</label>
+				</div>
+				{#if manualApply}
+					{#if currentFormulaSignature() !== lastAugmentSignature}
+						<p class="hint">Pending changes — click Apply to update the chart.</p>
+					{/if}
+				{:else if typingPreview}
+					<p class="hint">
+						While typing, recomputing first {FORMULA_PREVIEW_LIMIT.toLocaleString()} rows for speed.
+						Full dataset updates after a short pause.
+					</p>
+				{/if}
 				{#if !formulas.length}<p class="hint">No formulas yet.</p>{/if}
 				{#each formulas as f (f.id)}
 					<div class="formula">

@@ -47,7 +47,8 @@
 									<div class="dmeta">
 										<div class="tname">{t.name}</div>
 										<div class="tlong">{t.long}</div>
-										<a href={t.link} target="_blank" rel="noreferrer">More info</a>
+										<a class="more-info" href={t.link} target="_blank" rel="noreferrer">More info</a
+										>
 									</div>
 								</div>
 							{/if}
@@ -142,7 +143,7 @@
 	.dmeta .tlong {
 		color: #333;
 		font-size: 0.95rem;
-		margin-bottom: 6px;
+		margin-bottom: 4px;
 	}
 
 	.grid {
@@ -194,5 +195,11 @@
 		border-top: 1px solid #eef2f7;
 		padding-top: 10px;
 		margin-top: 8px;
+	}
+
+	.more-info {
+		color: #1a73e8;
+		font-size: 0.9rem;
+		text-decoration: none;
 	}
 </style>
