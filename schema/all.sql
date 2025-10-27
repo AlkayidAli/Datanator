@@ -81,3 +81,45 @@ CREATE TABLE IF NOT EXISTS data.file_snapshots (
 CREATE INDEX IF NOT EXISTS idx_project_files_project ON data.project_files(project_id);
 CREATE INDEX IF NOT EXISTS idx_file_ops_file_seq ON data.file_ops(file_id, seq);
 CREATE INDEX IF NOT EXISTS idx_file_snapshots_file_seq ON data.file_snapshots(file_id, seq);
+
+
+-- =========================
+-- Visualizations (D3 spec)
+-- =========================
+CREATE TABLE IF NOT EXISTS data.visualizations (
+  viz_id UUID PRIMARY KEY DEFAULT public.uuid_generate_v4(),
+  project_id UUID NOT NULL REFERENCES data.projects(project_id) ON DELETE CASCADE,
+  -- Optional link to a dataset tab; allows templates if NULL
+  file_id UUID REFERENCES data.project_files(file_id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  -- D3-friendly chart spec (your normalized ChartSpec)
+  spec JSONB NOT NULL,
+  -- Optional small preview image (PNG recommended)
+  thumbnail BYTEA,
+  thumbnail_mime TEXT,
+  is_template BOOLEAN NOT NULL DEFAULT FALSE,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES data.users(user_id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now()
+);
+
+-- Optional versioned history of specs (keeps past edits)
+CREATE TABLE IF NOT EXISTS data.visualization_revisions (
+  revision_id BIGSERIAL PRIMARY KEY,
+  viz_id UUID NOT NULL REFERENCES data.visualizations(viz_id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  spec JSONB NOT NULL,
+  comment TEXT,
+  created_by INTEGER REFERENCES data.users(user_id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now(),
+  UNIQUE (viz_id, version)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_visualizations_project ON data.visualizations(project_id);
+CREATE INDEX IF NOT EXISTS idx_visualizations_file ON data.visualizations(file_id);
+CREATE INDEX IF NOT EXISTS idx_visualizations_created_by ON data.visualizations(created_by);
+-- If you plan to query inside spec (e.g., spec->'mark'), add a GIN index:
+CREATE INDEX IF NOT EXISTS idx_visualizations_spec_gin ON data.visualizations USING GIN (spec);

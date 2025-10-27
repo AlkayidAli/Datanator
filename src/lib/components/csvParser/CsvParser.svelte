@@ -449,6 +449,10 @@
 				<span class="material-symbols-outlined">functions</span>
 				Data Lab
 			</button>
+			<button class="secondary" onclick={() => goto('/visualize')} title="Open Visualization">
+				<span class="material-symbols-outlined">insert_chart</span>
+				Visualize
+			</button>
 		</div>
 	</div>
 
