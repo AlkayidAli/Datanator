@@ -441,13 +441,14 @@ export function tryFilter(src: string, row: RowCtx): { ok: boolean; error?: stri
   }
 }
 
-export function countMatches(rows: RowCtx[], src: string, cap = 5000): { ok: boolean; count: number; error?: string } {
+export function countMatches(rows: RowCtx[], src: string, cap = 5000, vars?: RowCtx): { ok: boolean; count: number; error?: string } {
   try {
     const p = parseFilterExpr(src);
     let n = 0;
     const limit = Math.min(rows.length, cap);
     for (let i = 0; i < limit; i++) {
-      if (evalFilter(p, rows[i])) n++;
+      const ctx = vars ? { ...rows[i], ...vars } : rows[i];
+      if (evalFilter(p, ctx)) n++;
     }
     return { ok: true, count: n };
   } catch (e: any) {

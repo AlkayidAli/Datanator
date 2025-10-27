@@ -40,7 +40,8 @@
 
 	function addAdvancedFilter() {
 		if (!advFilterText.trim()) return;
-		transforms = [...transforms, { kind: 'filterExpr', expr: advFilterText }];
+		const vars = colAggValue !== null ? { COL_AGG: colAggValue } : undefined;
+		transforms = [...transforms, { kind: 'filterExpr', expr: advFilterText, vars }];
 	}
 
 	$effect(() => {
@@ -52,14 +53,23 @@
 			advFilterPreview = null;
 			return;
 		}
-		const t = tryFilterExpr(advFilterText, data.rows[0] ?? {});
+		const seedRow = {
+			...(data.rows[0] ?? {}),
+			...(colAggValue !== null ? { COL_AGG: colAggValue } : {})
+		} as any;
+		const t = tryFilterExpr(advFilterText, seedRow);
 		if (!t.ok) {
 			advFilterError = t.error || 'Invalid filter';
 			advFilterPreview = null;
 			return;
 		}
 		advFilterError = null;
-		const res = countMatches(data.rows as any, advFilterText, 3000);
+		const res = countMatches(
+			data.rows as any,
+			advFilterText,
+			3000,
+			colAggValue !== null ? { COL_AGG: colAggValue } : undefined
+		);
 		if (res.ok) {
 			advFilterPreview = { count: res.count, total: data.rows.length };
 		} else {
@@ -107,7 +117,8 @@
 		'<',
 		'<=',
 		'~',
-		'~*'
+		'~*',
+		'COL_AGG'
 	] as const;
 	let advSuggOpen = $state(false);
 	let advSuggItems = $state<string[]>([]);
@@ -785,11 +796,24 @@
 							<label for="filter-value"
 								>{filterOp === 'in' ? 'Values (comma separated)' : 'Value'}</label
 							>
-							<input
-								id="filter-value"
-								bind:value={filterValue}
-								placeholder={filterOp === 'in' ? 'a, b, c' : 'value'}
-							/>
+							<div class="filter-value-wrap">
+								<input
+									id="filter-value"
+									bind:value={filterValue}
+									placeholder={filterOp === 'in' ? 'a, b, c' : 'value'}
+								/>
+								{#if colAggValue !== null}
+									<button
+										class="icon-btn"
+										type="button"
+										title="Insert current Column aggregate result"
+										onclick={() => (filterValue = String(colAggValue))}
+										aria-label="Use Column aggregate result"
+									>
+										<span class="material-symbols-outlined">add</span>
+									</button>
+								{/if}
+							</div>
 						</div>
 						<label class="inline">
 							<input
@@ -836,6 +860,10 @@
 								<strong>Write powerful filters using this syntax:</strong>
 								<ul>
 									<li><strong>Columns</strong>: {'{'}Column Name{'}'} or bare identifiers</li>
+									<li>
+										<strong>Special variable</strong>: {'{'}COL_AGG{'}'} equals the current Column aggregate
+										result
+									</li>
 									<li>
 										<strong>Literals</strong>: numbers; strings in single quotes. Escape using ''
 										e.g. 'O''Brien'
@@ -1398,6 +1426,20 @@
 		align-items: center;
 		gap: 6px;
 		flex: 1 1 auto;
+	}
+	.filter-value-wrap {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex: 1 1 auto;
+		min-width: 0; /* allow shrinking within the row */
+	}
+	.filter-value-wrap input {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.filter-value-wrap .icon-btn {
+		white-space: nowrap;
 	}
 	.adv-row input {
 		flex: 1 1 auto;

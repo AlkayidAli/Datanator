@@ -8,7 +8,7 @@ export type RowAggOp = 'avg' | 'sum' | 'min' | 'max' | 'median' | 'countNonNull'
 
 export type Transform =
   | { kind: 'filterRows'; column: string; op: FilterOp; value: string | string[]; caseSensitive?: boolean }
-  | { kind: 'filterExpr'; expr: string }
+  | { kind: 'filterExpr'; expr: string; vars?: Record<string, unknown> }
   // keep backward-compatible rowAverage
   | { kind: 'rowAverage'; columns: string[]; outColumn: string }
   // new generic row aggregate
@@ -24,7 +24,7 @@ export function applyTransforms(base: ParsedCSV, transforms: Transform[]): Parse
         cur = filterRows(cur, t);
         break;
       case 'filterExpr':
-        cur = filterRowsExpr(cur, t.expr);
+        cur = filterRowsExpr(cur, t);
         break;
       case 'rowAverage':
         // deprecated: route to rowAggregate(avg)
@@ -100,17 +100,18 @@ function filterRows(csv: ParsedCSV, t: Extract<Transform, { kind: 'filterRows' }
   return { ...csv, rows: outRows };
 }
 
-function filterRowsExpr(csv: ParsedCSV, expr: string): ParsedCSV {
+function filterRowsExpr(csv: ParsedCSV, t: Extract<Transform, { kind: 'filterExpr' }>): ParsedCSV {
   let parsed;
   try {
-    parsed = parseFilterExpr(expr);
+    parsed = parseFilterExpr(t.expr);
   } catch {
     // invalid expression: return unchanged
     return csv;
   }
   const outRows = csv.rows.filter((row) => {
     try {
-      return !!evalFilter(parsed!, row as Record<string, unknown>);
+      const ctx = t.vars ? { ...(row as Record<string, unknown>), ...t.vars } : (row as Record<string, unknown>);
+      return !!evalFilter(parsed!, ctx);
     } catch {
       return false;
     }
