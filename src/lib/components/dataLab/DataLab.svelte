@@ -1435,6 +1435,8 @@
 		align-items: center;
 		gap: 6px;
 		flex: 1 1 auto;
+		min-width: 0; /* allow shrinking so input doesn't overflow card padding */
+		max-width: 100%;
 	}
 	.filter-value-wrap {
 		display: flex;
@@ -1452,6 +1454,8 @@
 	}
 	.adv-row input {
 		flex: 1 1 auto;
+		min-width: 0; /* prevent flex child from exceeding container */
+		max-width: 100%;
 	}
 	.icon-btn {
 		border: 1px solid #ddd;
@@ -1858,7 +1862,6 @@
 			'opsz' 24;
 		font-size: 20px;
 		line-height: 1;
-		margin-right: 0.35rem;
 		vertical-align: -3px;
 	}
 </style>
