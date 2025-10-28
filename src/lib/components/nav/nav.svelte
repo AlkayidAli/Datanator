@@ -11,11 +11,10 @@
 
 	<div class="nav-links">
 		<a href="/">Home</a>
-		<a href="/">Visualize</a>
-		<a href="/">Clean</a>
-		<a href="/">Analyze</a>
-		<a href="/">About us</a>
-		<a href="/">Contact</a>
+		<a href="/csvUploader">CSV Prep</a>
+		<a href="/dataLab">Data Lab</a>
+		<a href="/visualize">Visualize</a>
+		<a href="/about">About us</a>
 	</div>
 
 	{#if data.user}
@@ -52,9 +51,10 @@
 		.nav-links {
 			display: flex;
 			align-items: center;
+			justify-content: end;
 			gap: 10px;
 			width: 100%;
-			flex-direction: row-reverse;
+			flex-direction: row;
 
 			a {
 				padding: 0.5em;

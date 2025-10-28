@@ -4,23 +4,29 @@
 	import { toasts } from '$lib/stores/toastStore';
 </script>
 
-
 <div class="login-container">
 	<h2>Welcome Back!</h2>
-	<form action="/login" method="post" use:enhance={() => {
-		return async ({ result }) => {
-			if (result.type == 'success' && result.status === 200){
-				toasts.success('Login successful!');
-				goto('/');
-			} else if (result.type == 'redirect'){
-				goto(result.location, {invalidateAll:true})
-			} else{
-				// Handle error case, e.g., show a notification or alert
-				const errorText = (result.type === 'error' ? result.error.message : result.data?.message) || 'Login failed';
-				toasts.error(errorText);
-			}
-		};
-	}} class="login-form">
+	<form
+		action="/login"
+		method="post"
+		use:enhance={() => {
+			return async ({ result }) => {
+				if (result.type == 'success' && result.status === 200) {
+					toasts.success('Login successful!');
+					goto('/');
+				} else if (result.type == 'redirect') {
+					goto(result.location, { invalidateAll: true });
+				} else {
+					// Handle error case, e.g., show a notification or alert
+					const errorText =
+						(result.type === 'error' ? result.error.message : result.data?.message) ||
+						'Login failed';
+					toasts.error(errorText);
+				}
+			};
+		}}
+		class="login-form"
+	>
 		<div class="form-group">
 			<label for="email">Email</label>
 			<input type="text" id="email" name="email" required />
@@ -47,7 +53,8 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		margin: auto;
+		/* Add whitespace above, keep small gap below before the signup card */
+		margin: 4rem auto 1rem;
 		width: max-content;
 		height: max-content;
 		border: solid 1px global.$text-grey-10;
@@ -103,7 +110,7 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		margin: 1em auto;
+		margin: 5.5rem auto;
 		width: 349px;
 		height: max-content;
 		border: solid 1px global.$text-grey-10;

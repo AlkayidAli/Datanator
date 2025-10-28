@@ -689,6 +689,16 @@
 			Projects
 		</button>
 
+		<!-- Navigate to CSV parsing/import tool and visualization tool -->
+		<button class="secondary" onclick={() => goto('/csvUploader')} title="Go to CSV Prep">
+			<span class="material-symbols-outlined">upload_file</span>
+			CSV Prep
+		</button>
+		<button class="secondary" onclick={() => goto('/visualize')} title="Open Visualization">
+			<span class="material-symbols-outlined">insert_chart</span>
+			Visualize
+		</button>
+
 		{#if $activeFileId && currentFileName}
 			<div class="open-file" aria-label="Current file">
 				<span class="material-symbols-outlined file-icon">description</span>
@@ -1069,21 +1079,20 @@
 				</small>
 				<div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
 					<button
-						class="secondary"
+						class="secondary toggle-btn"
 						onclick={() => (editMode = !editMode)}
 						aria-pressed={editMode}
+						title="Toggle edit mode"
 						disabled={!baseData || !!preview}
 					>
-						{editMode ? 'Editing (on)' : 'Edit mode'}
+						<span class="material-symbols-outlined">{editMode ? 'edit_square' : 'edit'}</span>
+						{editMode ? 'Editing' : 'Edit mode'}
 					</button>
 					<button class="secondary" onclick={exportCSV} title="Export CSV" disabled={!tableData}>
 						<span class="material-symbols-outlined">file_download</span>
 						Export
 					</button>
-					<button class="secondary" onclick={() => goto('/visualize')} title="Open Visualization">
-						<span class="material-symbols-outlined">insert_chart</span>
-						Visualize
-					</button>
+
 					{#if preview && !editMode}
 						<small class="muted">Editing disabled while preview is active</small>
 					{/if}
@@ -1583,38 +1592,7 @@
 		margin-top: 8px;
 	}
 
-	button.primary {
-		min-height: 40px;
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		border-radius: 10px;
-		padding: 8px 12px;
-		border: 1px solid global.$text-grey-10;
-		background: global.$background-primary-color;
-		color: global.$text-white;
-		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
-	}
-	button.primary:hover {
-		background: global.$background-secondary-color;
-		border-color: global.$background-primary-color;
-		color: global.$text-grey-90;
-		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
-	}
-	button.secondary {
-		min-height: 36px;
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		border-radius: 10px;
-		padding: 6px 10px;
-		border: 1px solid global.$text-grey-10;
-		background: #fff;
-		color: #222;
-	}
-	button.secondary:hover {
-		background: global.$background-secondary-color;
-	}
+	/* Use global button styles for .primary/.secondary; override removed to match site-wide look */
 	button.link {
 		background: transparent;
 		border: none;
@@ -1864,5 +1842,23 @@
 	/* Optional: clip inner shadows/rounded corners exactly to card */
 	.tool {
 		overflow: hidden;
+	}
+
+	/* Toggle button active state to match CSV Parser */
+	.toggle-btn[aria-pressed='true'] {
+		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+	}
+
+	/* Material Symbols icon spacing (match CsvParser) */
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
+		margin-right: 0.35rem;
+		vertical-align: -3px;
 	}
 </style>
