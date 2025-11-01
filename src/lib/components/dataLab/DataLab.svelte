@@ -19,6 +19,7 @@
 	import type { RowAggOp } from '$lib/utils/datalab/transform';
 	import { downloadCSVFromParsed } from '$lib/utils/csv/export'; // NEW
 	import { goto } from '$app/navigation';
+	import { countMatches, tryFilter as tryFilterExpr } from '$lib/utils/datalab/filterExpr';
 
 	// Working pipeline
 	let transforms = $state<Transform[]>([]);
@@ -30,6 +31,51 @@
 	let filterOp = $state<FilterOp>('eq');
 	let filterValue = $state(''); // supports comma list for 'in'
 	let filterCase = $state(false);
+
+	// Advanced filter (expression)
+	let advFilterText = $state('');
+	let advFilterError = $state<string | null>(null);
+	let advFilterPreview = $state<{ count: number; total: number } | null>(null);
+	let advHelpOpen = $state(false);
+
+	function addAdvancedFilter() {
+		if (!advFilterText.trim()) return;
+		const vars = colAggValue !== null ? { COL_AGG: colAggValue } : undefined;
+		transforms = [...transforms, { kind: 'filterExpr', expr: advFilterText, vars }];
+	}
+
+	$effect(() => {
+		// validate and quick count for UX
+		advFilterText;
+		const data = baseData;
+		if (!data || !advFilterText.trim()) {
+			advFilterError = null;
+			advFilterPreview = null;
+			return;
+		}
+		const seedRow = {
+			...(data.rows[0] ?? {}),
+			...(colAggValue !== null ? { COL_AGG: colAggValue } : {})
+		} as any;
+		const t = tryFilterExpr(advFilterText, seedRow);
+		if (!t.ok) {
+			advFilterError = t.error || 'Invalid filter';
+			advFilterPreview = null;
+			return;
+		}
+		advFilterError = null;
+		const res = countMatches(
+			data.rows as any,
+			advFilterText,
+			3000,
+			colAggValue !== null ? { COL_AGG: colAggValue } : undefined
+		);
+		if (res.ok) {
+			advFilterPreview = { count: res.count, total: data.rows.length };
+		} else {
+			advFilterPreview = null;
+		}
+	});
 
 	// Row aggregate (generic)
 	let rowAggCols = $state<string[]>([]);
@@ -54,6 +100,113 @@
 	});
 	function toggle(section: SectionKey) {
 		collapsed = { ...collapsed, [section]: !collapsed[section] };
+	}
+
+	// Suggestions for advanced filter input (operators and column names)
+	const advKeywords = [
+		'AND',
+		'OR',
+		'NOT',
+		'BETWEEN',
+		'LIKE',
+		'ILIKE',
+		'=',
+		'!=',
+		'>',
+		'>=',
+		'<',
+		'<=',
+		'~',
+		'~*',
+		'COL_AGG'
+	] as const;
+	let advSuggOpen = $state(false);
+	let advSuggItems = $state<string[]>([]);
+	let advSuggIndex = $state(0);
+	let advSuggAnchor: HTMLInputElement | null = null;
+	let advSuggPos = $state<{ left: number; top: number; width: number }>({
+		left: 0,
+		top: 0,
+		width: 240
+	});
+
+	function advGetTokenRange(
+		value: string,
+		caret: number
+	): { start: number; end: number; q: string; openedBrace: boolean } | null {
+		const left = value.slice(0, caret);
+		const braceIdx = left.lastIndexOf('{');
+		if (braceIdx >= 0 && braceIdx >= left.lastIndexOf('}')) {
+			return { start: braceIdx, end: caret, q: left.slice(braceIdx + 1), openedBrace: true };
+		}
+		const m = left.match(/[A-Za-z_][A-Za-z0-9_]*$/);
+		if (m) {
+			return { start: caret - m[0].length, end: caret, q: m[0], openedBrace: false };
+		}
+		return null;
+	}
+	function advOpenSuggest(input: HTMLInputElement) {
+		advSuggAnchor = input;
+		const rect = input.getBoundingClientRect();
+		advSuggPos = { left: rect.left, top: rect.bottom + 4, width: rect.width };
+		advSuggOpen = true;
+		advSuggIndex = 0;
+	}
+	function advCloseSuggest() {
+		advSuggOpen = false;
+		advSuggItems = [];
+		advSuggAnchor = null;
+	}
+	function advUpdateSuggest(input: HTMLInputElement) {
+		const caret = input.selectionStart ?? input.value.length;
+		const tok = advGetTokenRange(input.value, caret);
+		if (!tok) {
+			advCloseSuggest();
+			return;
+		}
+		const q = tok.q.toLowerCase();
+		const cols = headers.filter((h) => h.toLowerCase().includes(q));
+		const ops = (Array.from(advKeywords) as string[]).filter((k) => k.toLowerCase().includes(q));
+		const items = [...ops, ...cols].slice(0, 50);
+		if (!items.length) {
+			advCloseSuggest();
+			return;
+		}
+		advSuggItems = items;
+		advOpenSuggest(input);
+	}
+	function advInsertSuggestion(name: string) {
+		if (!advSuggAnchor) return;
+		const input = advSuggAnchor;
+		const caret = input.selectionStart ?? input.value.length;
+		const tok = advGetTokenRange(input.value, caret);
+		if (!tok) return;
+		const before = input.value.slice(0, tok.start);
+		const after = input.value.slice(tok.end);
+		let insert = name;
+		if (!advKeywords.includes(name as any) && tok.openedBrace) insert = name + '}';
+		const next = before + insert + after;
+		input.value = next;
+		const newCaret = before.length + insert.length;
+		input.setSelectionRange(newCaret, newCaret);
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		advCloseSuggest();
+	}
+	function onAdvKeydown(e: KeyboardEvent) {
+		if (!advSuggOpen) return;
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			advSuggIndex = (advSuggIndex + 1) % Math.max(1, advSuggItems.length);
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			advSuggIndex =
+				(advSuggIndex - 1 + Math.max(1, advSuggItems.length)) % Math.max(1, advSuggItems.length);
+		} else if (e.key === 'Enter') {
+			e.preventDefault();
+			if (advSuggItems.length) advInsertSuggestion(advSuggItems[advSuggIndex]);
+		} else if (e.key === 'Escape') {
+			advCloseSuggest();
+		}
 	}
 
 	// Header context menu and rename state
@@ -536,6 +689,16 @@
 			Projects
 		</button>
 
+		<!-- Navigate to CSV parsing/import tool and visualization tool -->
+		<button class="secondary" onclick={() => goto('/csvUploader')} title="Go to CSV Prep">
+			<span class="material-symbols-outlined">upload_file</span>
+			CSV Prep
+		</button>
+		<button class="secondary" onclick={() => goto('/visualize')} title="Open Visualization">
+			<span class="material-symbols-outlined">insert_chart</span>
+			Visualize
+		</button>
+
 		{#if $activeFileId && currentFileName}
 			<div class="open-file" aria-label="Current file">
 				<span class="material-symbols-outlined file-icon">description</span>
@@ -643,11 +806,24 @@
 							<label for="filter-value"
 								>{filterOp === 'in' ? 'Values (comma separated)' : 'Value'}</label
 							>
-							<input
-								id="filter-value"
-								bind:value={filterValue}
-								placeholder={filterOp === 'in' ? 'a, b, c' : 'value'}
-							/>
+							<div class="filter-value-wrap">
+								<input
+									id="filter-value"
+									bind:value={filterValue}
+									placeholder={filterOp === 'in' ? 'a, b, c' : 'value'}
+								/>
+								{#if colAggValue !== null}
+									<button
+										class="icon-btn"
+										type="button"
+										title="Insert current Column aggregate result"
+										onclick={() => (filterValue = String(colAggValue))}
+										aria-label="Use Column aggregate result"
+									>
+										<span class="material-symbols-outlined">add</span>
+									</button>
+								{/if}
+							</div>
 						</div>
 						<label class="inline">
 							<input
@@ -660,6 +836,84 @@
 						<div class="actions">
 							<button class="secondary" onclick={addFilter} disabled={!filterColumn}
 								>Add filter</button
+							>
+						</div>
+
+						<hr class="sep" />
+
+						<div class="adv-head">
+							<h4 class="subhead">Advanced filter (expression)</h4>
+							<button
+								class="icon-btn"
+								type="button"
+								title="What can I write here?"
+								onclick={() => (advHelpOpen = !advHelpOpen)}
+							>
+								<span class="material-symbols-outlined">info</span>
+							</button>
+						</div>
+						<div class="row adv-row">
+							<label for="adv-filter-input">Expression</label>
+							<div class="adv-input-wrap">
+								<input
+									id="adv-filter-input"
+									bind:value={advFilterText}
+									autocomplete="off"
+									placeholder={`{Age} BETWEEN 18 AND 30 AND ILIKE 'jo%'`}
+									oninput={(e) => advUpdateSuggest(e.target as HTMLInputElement)}
+									onkeydown={onAdvKeydown}
+								/>
+							</div>
+						</div>
+						{#if advHelpOpen}
+							<div class="adv-help" role="note" aria-live="polite">
+								<strong>Write powerful filters using this syntax:</strong>
+								<ul>
+									<li><strong>Columns</strong>: {'{'}Column Name{'}'} or bare identifiers</li>
+									<li>
+										<strong>Special variable</strong>: {'{'}COL_AGG{'}'} equals the current Column aggregate
+										result
+									</li>
+									<li>
+										<strong>Literals</strong>: numbers; strings in single quotes. Escape using ''
+										e.g. 'O''Brien'
+									</li>
+									<li>
+										<strong>Logical</strong>: AND, OR, NOT, parentheses. Precedence: NOT &gt; AND
+										&gt; OR
+									</li>
+									<li>
+										<strong>Comparisons</strong>: =, != (or &lt;&gt;), &gt;, &gt;=, &lt;, &lt;=
+									</li>
+									<li><strong>Ranges</strong>: x BETWEEN a AND b (use NOT for NOT BETWEEN)</li>
+									<li><strong>Text</strong>: LIKE / ILIKE with wildcards % (any) and _ (one)</li>
+									<li>
+										<strong>Regex</strong>: ~ 'pattern' (case), ~* 'pattern' (case-insensitive)
+									</li>
+								</ul>
+								<strong>Examples</strong>
+								<code>{`{City} ILIKE 'san %' OR {Age} BETWEEN 18 AND 30`}</code>
+								<code>{`{Email} ~* '@example\\.com$' AND NOT ({Status} = 'inactive')`}</code>
+								<code>{`{Name} LIKE 'Jo_n %' AND ({Score} >= 80 AND {Score} <= 100)`}</code>
+								<p class="muted">
+									Notes: comparisons are numeric when both sides are numeric-like; otherwise string.
+									LIKE/ILIKE apply to the whole value; use % to match substrings.
+								</p>
+							</div>
+						{/if}
+						{#if advFilterError}
+							<p class="err">{advFilterError}</p>
+						{:else if advFilterPreview}
+							<p class="hint">
+								Matches about {advFilterPreview.count} of {advFilterPreview.total} (scanned first 3,000
+								rows)
+							</p>
+						{/if}
+						<div class="actions">
+							<button
+								class="secondary"
+								onclick={addAdvancedFilter}
+								disabled={!advFilterText.trim() || !!advFilterError}>Add advanced filter</button
 							>
 						</div>
 					</div>
@@ -691,7 +945,7 @@
 						</div>
 						<div class="row">
 							<label for="col-agg-op">Operation</label>
-							<select bind:value={colAggOp}>
+							<select id="col-agg-op" bind:value={colAggOp}>
 								<option value="avg">Average</option>
 								<option value="sum">Sum</option>
 								<option value="min">Min</option>
@@ -702,7 +956,7 @@
 						</div>
 						<div class="row">
 							<label for="col-agg-result">Result</label>
-							<strong>{colAggValue ?? '-'}</strong>
+							<strong id="col-agg-result">{colAggValue ?? '-'}</strong>
 						</div>
 						<div class="actions">
 							<button
@@ -825,21 +1079,20 @@
 				</small>
 				<div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
 					<button
-						class="secondary"
+						class="secondary toggle-btn"
 						onclick={() => (editMode = !editMode)}
 						aria-pressed={editMode}
+						title="Toggle edit mode"
 						disabled={!baseData || !!preview}
 					>
-						{editMode ? 'Editing (on)' : 'Edit mode'}
+						<span class="material-symbols-outlined">{editMode ? 'edit_square' : 'edit'}</span>
+						{editMode ? 'Editing' : 'Edit mode'}
 					</button>
 					<button class="secondary" onclick={exportCSV} title="Export CSV" disabled={!tableData}>
 						<span class="material-symbols-outlined">file_download</span>
 						Export
 					</button>
-					<button class="secondary" onclick={() => goto('/visualize')} title="Open Visualization">
-						<span class="material-symbols-outlined">insert_chart</span>
-						Visualize
-					</button>
+
 					{#if preview && !editMode}
 						<small class="muted">Editing disabled while preview is active</small>
 					{/if}
@@ -1034,6 +1287,27 @@
 	</div>
 {/if}
 
+{#if advSuggOpen}
+	<div
+		class="adv-sugg-pop"
+		style={`left:${advSuggPos.left}px; top:${advSuggPos.top}px; width:${advSuggPos.width}px;`}
+		role="listbox"
+		aria-label="Suggestions"
+	>
+		{#each advSuggItems as it, i}
+			<button
+				type="button"
+				class:active={i === advSuggIndex}
+				onclick={() => advInsertSuggestion(it)}
+				role="option"
+				aria-selected={i === advSuggIndex}
+			>
+				{it}
+			</button>
+		{/each}
+	</div>
+{/if}
+
 <style lang="scss">
 	@use '../../../styles/global.scss' as global;
 
@@ -1140,6 +1414,106 @@
 		display: block;
 	}
 
+	.sep {
+		margin: 10px 0;
+		border: 0;
+		height: 1px;
+		background: #eee;
+	}
+	.subhead {
+		margin: 6px 0 2px;
+		font-size: 0.95rem;
+	}
+	.adv-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.adv-row .adv-input-wrap {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex: 1 1 auto;
+		min-width: 0; /* allow shrinking so input doesn't overflow card padding */
+		max-width: 100%;
+	}
+	.filter-value-wrap {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex: 1 1 auto;
+		min-width: 0; /* allow shrinking within the row */
+	}
+	.filter-value-wrap input {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.filter-value-wrap .icon-btn {
+		white-space: nowrap;
+	}
+	.adv-row input {
+		flex: 1 1 auto;
+		min-width: 0; /* prevent flex child from exceeding container */
+		max-width: 100%;
+	}
+	.icon-btn {
+		border: 1px solid #ddd;
+		background: #fff;
+		border-radius: 8px;
+		padding: 4px 6px;
+		line-height: 1;
+	}
+	.adv-help {
+		margin-top: 6px;
+		border: 1px solid #e6e6e6;
+		border-radius: 8px;
+		padding: 8px;
+		background: #fbfbfb;
+		font-size: 0.9rem;
+		display: grid;
+		gap: 4px;
+	}
+	.adv-help code {
+		display: block;
+		padding: 4px 6px;
+		background: #fff;
+		border: 1px solid #eee;
+		border-radius: 6px;
+		font-family:
+			ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+		font-size: 0.85rem;
+		color: #333;
+	}
+
+	/* Suggestions popover */
+	.adv-sugg-pop {
+		position: fixed;
+		z-index: 2000;
+		background: #fff;
+		border: 1px solid #e2e6ec;
+		border-radius: 8px;
+		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+		padding: 4px;
+		display: grid;
+		gap: 2px;
+		max-height: 220px;
+		overflow: auto;
+	}
+	.adv-sugg-pop > button {
+		text-align: left;
+		border: none;
+		background: transparent;
+		padding: 6px 8px;
+		border-radius: 6px;
+		font-size: 0.9rem;
+		cursor: pointer;
+	}
+	.adv-sugg-pop > button:hover,
+	.adv-sugg-pop > button.active {
+		background: #eef3ff;
+	}
+
 	/* Inputs/selects (match CsvHome feel) */
 	.tool select,
 	.tool input[type='text'],
@@ -1222,38 +1596,7 @@
 		margin-top: 8px;
 	}
 
-	button.primary {
-		min-height: 40px;
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		border-radius: 10px;
-		padding: 8px 12px;
-		border: 1px solid global.$text-grey-10;
-		background: global.$background-primary-color;
-		color: global.$text-white;
-		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
-	}
-	button.primary:hover {
-		background: global.$background-secondary-color;
-		border-color: global.$background-primary-color;
-		color: global.$text-grey-90;
-		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
-	}
-	button.secondary {
-		min-height: 36px;
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		border-radius: 10px;
-		padding: 6px 10px;
-		border: 1px solid global.$text-grey-10;
-		background: #fff;
-		color: #222;
-	}
-	button.secondary:hover {
-		background: global.$background-secondary-color;
-	}
+	/* Use global button styles for .primary/.secondary; override removed to match site-wide look */
 	button.link {
 		background: transparent;
 		border: none;
@@ -1503,5 +1846,22 @@
 	/* Optional: clip inner shadows/rounded corners exactly to card */
 	.tool {
 		overflow: hidden;
+	}
+
+	/* Toggle button active state to match CSV Parser */
+	.toggle-btn[aria-pressed='true'] {
+		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+	}
+
+	/* Material Symbols icon spacing (match CsvParser) */
+	.material-symbols-outlined {
+		font-variation-settings:
+			'FILL' 0,
+			'wght' 500,
+			'GRAD' 0,
+			'opsz' 24;
+		font-size: 20px;
+		line-height: 1;
+		vertical-align: -3px;
 	}
 </style>

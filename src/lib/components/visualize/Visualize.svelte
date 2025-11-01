@@ -70,6 +70,10 @@
 				<span class="material-symbols-outlined">functions</span>
 				Data Lab
 			</button>
+			<button class="secondary" onclick={() => goto('/csvUploader')}>
+				<span class="material-symbols-outlined">upload_file</span>
+				CSV Prep
+			</button>
 
 			<div class="spacer"></div>
 
@@ -164,16 +168,6 @@
 	.actions {
 		display: inline-flex;
 		gap: 8px;
-	}
-	button.secondary {
-		min-height: 36px;
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		border-radius: 10px;
-		padding: 6px 10px;
-		border: 1px solid #e1e1e1;
-		background: #fff;
 	}
 	.muted {
 		color: #666;

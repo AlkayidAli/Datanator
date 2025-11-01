@@ -424,6 +424,7 @@
 			placeholder="Search rows…"
 			bind:value={search}
 			aria-label="Search rows"
+			name="search input"
 		/>
 
 		<div class="util-actions">

@@ -1,4 +1,5 @@
 import type { ParsedCSV, CellValue } from '$lib/stores/csvData';
+import { parseFilterExpr, evalFilter } from './filterExpr';
 
 export type FilterOp = 'eq' | 'neq' | 'contains' | 'in';
 
@@ -7,6 +8,7 @@ export type RowAggOp = 'avg' | 'sum' | 'min' | 'max' | 'median' | 'countNonNull'
 
 export type Transform =
   | { kind: 'filterRows'; column: string; op: FilterOp; value: string | string[]; caseSensitive?: boolean }
+  | { kind: 'filterExpr'; expr: string; vars?: Record<string, unknown> }
   // keep backward-compatible rowAverage
   | { kind: 'rowAverage'; columns: string[]; outColumn: string }
   // new generic row aggregate
@@ -20,6 +22,9 @@ export function applyTransforms(base: ParsedCSV, transforms: Transform[]): Parse
     switch (t.kind) {
       case 'filterRows':
         cur = filterRows(cur, t);
+        break;
+      case 'filterExpr':
+        cur = filterRowsExpr(cur, t);
         break;
       case 'rowAverage':
         // deprecated: route to rowAggregate(avg)
@@ -49,6 +54,8 @@ export function summarizeTransforms(transforms: Transform[]): string {
           const v = Array.isArray(t.value) ? `[${t.value.join(', ')}]` : JSON.stringify(t.value);
           return `Filter: ${t.column} ${t.op} ${v}`;
         }
+        case 'filterExpr':
+          return `FilterExpr: ${t.expr}`;
         case 'rowAverage':
           return `RowAvg(${t.columns.join(',')}) -> ${t.outColumn}`;
         case 'rowAggregate':
@@ -90,6 +97,25 @@ function filterRows(csv: ParsedCSV, t: Extract<Transform, { kind: 'filterRows' }
     return true;
   });
 
+  return { ...csv, rows: outRows };
+}
+
+function filterRowsExpr(csv: ParsedCSV, t: Extract<Transform, { kind: 'filterExpr' }>): ParsedCSV {
+  let parsed;
+  try {
+    parsed = parseFilterExpr(t.expr);
+  } catch {
+    // invalid expression: return unchanged
+    return csv;
+  }
+  const outRows = csv.rows.filter((row) => {
+    try {
+      const ctx = t.vars ? { ...(row as Record<string, unknown>), ...t.vars } : (row as Record<string, unknown>);
+      return !!evalFilter(parsed!, ctx);
+    } catch {
+      return false;
+    }
+  });
   return { ...csv, rows: outRows };
 }
 

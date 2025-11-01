@@ -249,7 +249,7 @@
 	<div class="card">
 		<div class="row">
 			<div class="col">
-				<label class="label">Project</label>
+				<label class="label" for="project">Project</label>
 				{#if loadingProjects}
 					<div class="skeleton"></div>
 				{:else if projects.length === 0}
@@ -387,7 +387,16 @@
 
 <!-- Overlay with dropzone -->
 {#if showDrop}
-	<div class="overlay" onclick={closeOverlay}>
+	<div
+		class="overlay"
+		role="button"
+		tabindex="0"
+		aria-label="Close upload overlay"
+		onclick={closeOverlay}
+		onkeydown={(e) => {
+			if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') closeOverlay();
+		}}
+	>
 		<div
 			class="dropzone"
 			class:dragging={isDragging}
@@ -400,7 +409,16 @@
 			ondrop={onDrop}
 			role="dialog"
 			aria-modal="true"
-			aria-label="Upload CSV by dragging a file here or click to browse"
+			tabindex="0"
+			aria-label="Upload CSV by dragging a file here or press Enter to browse"
+			onkeydown={(e) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					openFilePicker();
+				} else if (e.key === 'Escape') {
+					closeOverlay();
+				}
+			}}
 		>
 			<div class="dz-content">
 				<strong>Drag & drop</strong> your CSV here
