@@ -945,7 +945,7 @@
 						</div>
 						<div class="row">
 							<label for="col-agg-op">Operation</label>
-							<select bind:value={colAggOp}>
+							<select id="col-agg-op" bind:value={colAggOp}>
 								<option value="avg">Average</option>
 								<option value="sum">Sum</option>
 								<option value="min">Min</option>
@@ -956,7 +956,7 @@
 						</div>
 						<div class="row">
 							<label for="col-agg-result">Result</label>
-							<strong>{colAggValue ?? '-'}</strong>
+							<strong id="col-agg-result">{colAggValue ?? '-'}</strong>
 						</div>
 						<div class="actions">
 							<button
