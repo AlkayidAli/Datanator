@@ -1,6 +1,6 @@
 import PostgreSQL from "$lib/common/DB_Postgresql";
 import type { ISession, IUser } from "$lib/interfaces";
-import { fail, type Action, type Actions } from "@sveltejs/kit";
+import { fail, redirect, type Action, type Actions } from "@sveltejs/kit";
 
 const login: Action = async ({request, cookies}) => {
     // get the form data
@@ -45,9 +45,8 @@ const login: Action = async ({request, cookies}) => {
         maxAge: 60 * 60 * 8 // 8 hours
     })
 
-    return {
-        success: true,
-    }
+    // Always redirect to home after successful login so it works with and without JS
+    throw redirect(303, '/');
 }
 
 export const actions: Actions = { default: login };

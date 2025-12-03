@@ -17,10 +17,13 @@ export async function handle({event, resolve}) {
         where session.guid_id = $1
         `
         const resp = await PostgreSQL().query(sql, [sessionGUID])
-        if(resp.rowCount && resp.rows[0].date_expired > Date.now()){
+        if(resp.rowCount){
+            const expires = new Date(resp.rows[0].date_expired).getTime();
+            if(expires > Date.now()){
             const user: IUser = {...resp.rows[0]}
             // Set the locals!
             event.locals.user = user
+            }
         }
     }
 
@@ -32,8 +35,8 @@ export async function handle({event, resolve}) {
         return json({status:401, message:'Not Authorized'})
     } 
 
-    // List of public/auth pages that should NOT redirect
-    const noRedirectPaths = ['/login', '/create', '/forgot', '/change', `/signup`];
+    // Public pages accessible without login: landing, login, signup
+    const noRedirectPaths = ['/', '/login', '/signup'];
 
     if (
         noRedirectPaths.every(path => event.url.pathname !== path) &&
@@ -46,11 +49,11 @@ export async function handle({event, resolve}) {
                 JSON.stringify({
                     type: 'redirect',
                     status: 303,
-                    location: '/login',
+                    location: '/',
                 } satisfies ActionResult)
             )
         } else {
-            throw redirect(303, '/login')
+            throw redirect(303, '/')
         }
     }
 

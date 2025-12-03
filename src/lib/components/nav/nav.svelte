@@ -9,24 +9,25 @@
 		<h1 class="logo-text">Datanator</h1>
 	</div>
 
-	<div class="nav-links">
-		<a href="/">Home</a>
-		<a href="/csvUploader">CSV Prep</a>
-		<a href="/dataLab">Data Lab</a>
-		<a href="/visualize">Visualize</a>
-		<a href="/about">About us</a>
-	</div>
-
 	{#if data.user}
+		<div class="nav-links">
+			<a href="/">Home</a>
+			<a href="/csvUploader">CSV Prep</a>
+			<a href="/dataLab">Data Lab</a>
+			<a href="/visualize">Visualize</a>
+			<a href="/about">About us</a>
+		</div>
 		<img
 			src={'https://ui-avatars.com/api/?name=' + data.user.email}
 			alt="Avatar"
 			style="width:32px;height:32px;border-radius:50%;margin-right:0.5em;"
 		/>
-		<button class="secondary"><a href="/logout">Logout</a></button>
+		<a class="btn secondary" href="/logout">Logout</a>
 	{:else}
-		<button class="secondary">Login</button>
-		<button class="primary">Sign Up</button>
+		<!-- Hide app links when logged out; show only auth actions -->
+		<div class="spacer"></div>
+		<a class="btn secondary" href="/login">Login</a>
+		<a class="btn primary" href="/signup">Sign Up</a>
 	{/if}
 </nav>
 
@@ -59,12 +60,18 @@
 			a {
 				padding: 0.5em;
 			}
+
+			&.hidden {
+				display: none;
+			}
+		}
+
+		.spacer {
+			flex: 1 1 auto;
 		}
 
 		.nav-buttons {
-			display: flex;
-			align-items: center;
-			gap: 10px;
+			/* unused: removed to avoid warnings */
 		}
 		.logo {
 			width: 36px;
