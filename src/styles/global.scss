@@ -28,7 +28,7 @@ $btn-transition: background-color .18s ease, color .18s ease, border-color .18s 
     font-weight: $font-weight-normal;
 }
 
-// Base button
+// Base button (native button)
 :global(button){
   display: inline-flex;
   align-items: center;
@@ -54,13 +54,41 @@ $btn-transition: background-color .18s ease, color .18s ease, border-color .18s 
   transition: $btn-transition;
 }
 
+// Base button (anchor styled as button)
+:global(a.btn){
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
+  gap: $btn-gap;
+
+  background: transparent;
+  color: $text-grey-90;
+
+  padding: $btn-pad-y $btn-pad-x;
+  border: 1px solid $text-grey-10;
+  border-radius: $btn-radius;
+
+  font-family: $font-family-primary;
+  font-weight: $font-weight-normal;
+  font-size: 1rem;
+
+  cursor: pointer;
+  user-select: none;
+
+  box-shadow: $btn-shadow;
+  transition: $btn-transition;
+}
+
 // Focus, active, disabled
-:global(button:focus-visible) {
+:global(button:focus-visible),
+:global(a.btn:focus-visible) {
   outline: 3px solid rgba(74,144,226,.6);
   outline-offset: 2px;
 }
 
-:global(button:active) {
+:global(button:active),
+:global(a.btn:active) {
   transform: translateY(1px);
   box-shadow: $btn-shadow-active;
 }
@@ -74,7 +102,9 @@ $btn-transition: background-color .18s ease, color .18s ease, border-color .18s 
 
 // Icon helpers (works for <svg> or a .icon span)
 :global(button) .icon,
-:global(button) svg {
+:global(button) svg,
+:global(a.btn) .icon,
+:global(a.btn) svg {
   flex: 0 0 auto;
   width: 1.1em;
   height: 1.1em;
