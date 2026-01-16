@@ -268,10 +268,8 @@ See [SvelteKit Adapters](https://svelte.dev/docs/kit/adapters) for platform-spec
 ✅ Role-based access control  
 ✅ Safe expression evaluator (no `eval()`)
 
-## License
 
-[Your License Here]
 
 ## Support
 
-For issues or questions, please open an issue or contact the maintainers.
+For issues or questions, please open an issue.
